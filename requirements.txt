@@ -1,4 +1,14 @@
-# Nixpacks/Railway install from this file and skip `pip install .` when it lists
-# third-party pins only, so the src-layout package never becomes importable.
-# Installing the project here pulls dependencies from pyproject.toml.
-.
+python-telegram-bot>=21.7,<22
+openai>=1.51.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+python-dotenv>=1.0.1
+SQLAlchemy>=2.0.36
+alembic>=1.14.0
+loguru>=0.7.2
+asyncpg>=0.30.0
+psycopg[binary]>=3.2.0
+greenlet>=3.1.0
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+aiosqlite>=0.20.0
