@@ -40,7 +40,7 @@ cd "Chief of staff"
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install -e .
+pip install -e ".[dev]"
 cp .env.example .env
 ```
 
@@ -79,8 +79,8 @@ Send `/start` or any text. The bot replies `Chief of Staff is running`.
 | --- | --- |
 | `.gitignore` | venv, `.env`, bytecode, caches |
 | `.env.example` | Secret template |
-| `requirements.txt` | Runtime dependencies |
-| `pyproject.toml` | src-layout package and `chief-of-staff` console script |
+| `requirements.txt` | Installs this package (Nixpacks/Railway `pip install -r`) |
+| `pyproject.toml` | src-layout package, runtime deps, and `chief-of-staff` script |
 | `alembic.ini` | Alembic; DB URL is set from Settings |
 | `alembic/env.py` | Loads metadata and the sync database URL |
 | `alembic/script.py.mako` | New revision template |
