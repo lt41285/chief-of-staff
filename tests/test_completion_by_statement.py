@@ -17,6 +17,7 @@ from chief_of_staff.services.completion_statement import (
     classify_completion_phrasing,
     extract_amounts,
 )
+from chief_of_staff.services.lifecycle_format import NO_MATCHED_COMPLETION
 from chief_of_staff.services.lifecycle_session import InMemoryLifecycleStore
 from chief_of_staff.services.reminder_policy import at_kyiv
 from chief_of_staff.services.task_intake import IntakeKind, TaskIntakeService
@@ -202,9 +203,9 @@ async def test_other_meeting_does_not_force_match(
         "Я домовився з Лесею про іншу зустріч",
         lifecycle=_life(repository),
     )
-    assert result.kind != LifecycleKind.ASK_CONFIRM
-    assert interpreter.calls
-    assert interpreter.calls[0]["user_text"] == "Я домовився з Лесею про іншу зустріч"
+    assert result.kind == LifecycleKind.ASK_WHICH
+    assert NO_MATCHED_COMPLETION in result.text
+    assert interpreter.calls == []
 
 
 async def test_two_similar_lesia_tasks_ask_which(

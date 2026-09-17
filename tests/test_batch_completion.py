@@ -25,6 +25,7 @@ from chief_of_staff.services.lifecycle_format import (
     ASK_LIST_COMPLETED,
     ASK_WHICH_TIME,
     NEED_TASK_HINT,
+    NO_MATCHED_COMPLETION,
     SKIPPED_ACTUAL_ALL,
 )
 from chief_of_staff.services.lifecycle_session import (
@@ -350,6 +351,82 @@ def test_vykonav_is_recognised_without_an_llm_call() -> None:
     parsed = parse_task_intent_deterministic("я виконав лист до IFC")
     assert parsed is not None
     assert parsed.kind == TaskIntentKind.COMPLETE_TASK
+
+
+TAKOZH_DONE = "Також домовився з Боровцем про зустріч до підготовки до зима"
+
+
+def test_takozh_winter_statement_is_completed_phrasing() -> None:
+    assert classify_completion_phrasing(TAKOZH_DONE) == CompletionPhrasing.COMPLETED
+
+
+async def test_takozh_winter_statement_matches_open_task(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    await _seed(repository, WINTER, STORAGE, PANELS, SHUTTLE)
+    life = _life(repository)
+    result = await life.consider_completed_statement(USER, CHAT, TAKOZH_DONE)
+    assert result is not None
+    assert result.kind == LifecycleKind.ASK_CONFIRM
+    assert WINTER in result.text
+
+
+async def test_past_tense_is_not_silent_general_chat(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    """A completed-action report must not become «Прийнято, дякую за оновлення!»."""
+    await _seed(repository, WINTER)
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.GENERAL_CHAT,
+                chat_reply="Прийнято, дякую за оновлення!",
+            )
+        ]
+    )
+    reply = await process_user_utterance(
+        TaskIntakeService(ScriptedInterpreter([]), InMemoryTaskSessionStore(), repository),
+        USER,
+        CHAT,
+        TAKOZH_DONE,
+        lifecycle=_life(repository),
+        queries=TaskQueryService(repository),
+        router=router,
+        context=InMemoryConversationStore(_clock()),
+    )
+    assert "Прийнято" not in reply.text
+    assert "дякую за оновлення" not in reply.text.casefold()
+    assert reply.kind == LifecycleKind.ASK_CONFIRM
+    assert WINTER in reply.text
+    assert router.calls == []
+
+
+async def test_unmatched_completion_says_could_not_match(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    await _seed(repository, STORAGE)
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.GENERAL_CHAT,
+                chat_reply="Прийнято, дякую за оновлення!",
+            )
+        ]
+    )
+    reply = await process_user_utterance(
+        TaskIntakeService(ScriptedInterpreter([]), InMemoryTaskSessionStore(), repository),
+        USER,
+        CHAT,
+        TAKOZH_DONE,
+        lifecycle=_life(repository),
+        queries=TaskQueryService(repository),
+        router=router,
+        context=InMemoryConversationStore(_clock()),
+    )
+    assert reply.kind == LifecycleKind.ASK_WHICH
+    assert NO_MATCHED_COMPLETION in reply.text
+    assert "Прийнято" not in reply.text
+    assert router.calls == []
 
 
 async def test_impersonal_list_is_still_a_batch(

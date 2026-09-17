@@ -18,8 +18,14 @@ def format_unknown_project(name: str) -> str:
     return f"Не знайшов проєкт «{name}». {ASK_PROJECTS}"
 
 
+ASK_WHICH_PERSON = "Уточни, про кого йдеться."
+
+
 def format_unknown_person(name: str) -> str:
-    return f"Не знайшов людину «{name}» серед людей у твоїх задачах."
+    cleaned = (name or "").strip(" —–-\t")
+    if not cleaned:
+        return ASK_WHICH_PERSON
+    return f"Не знайшов людину «{cleaned}» серед людей у твоїх задачах."
 
 
 def format_person_mention_list(

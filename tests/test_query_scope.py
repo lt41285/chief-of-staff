@@ -2,11 +2,13 @@ from collections.abc import AsyncIterator
 from datetime import date, datetime
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from chief_of_staff.bot.utterance import INFORMAL_ADDRESS_ACK, process_user_utterance
 from chief_of_staff.infrastructure.database.base import Base
+from chief_of_staff.infrastructure.database.orm.task import TaskRow
 from chief_of_staff.infrastructure.database.repository import SqlAlchemyTaskRepository
 from chief_of_staff.models.utterance_intent import (
     GroundedReply,
@@ -15,8 +17,13 @@ from chief_of_staff.models.utterance_intent import (
     UtteranceInterpretation,
 )
 from chief_of_staff.prompts.conversation import phrase_instructions_for
-from chief_of_staff.services.conversation_context import InMemoryConversationStore
+from chief_of_staff.services.clock import KYIV
+from chief_of_staff.services.conversation_context import (
+    ConversationSnapshot,
+    InMemoryConversationStore,
+)
 from chief_of_staff.services.daily_planning import DailyPlanningService
+from chief_of_staff.services.followup_intent import parse_context_followup
 from chief_of_staff.services.intent_router import IntentRouter, apply_context
 from chief_of_staff.services.planning_session import InMemoryPlanningSessionStore
 from chief_of_staff.services.project_ops import ProjectManagementService
@@ -24,6 +31,7 @@ from chief_of_staff.services.project_session import InMemoryProjectOpStore
 from chief_of_staff.services.query_scope import looks_like_drop_person_filter
 from chief_of_staff.services.task_intake import TaskIntakeService
 from chief_of_staff.services.task_query import TaskQueryService
+from chief_of_staff.services.task_query_format import ASK_WHICH_PERSON, format_unknown_person
 from chief_of_staff.services.task_session import InMemoryTaskSessionStore
 from chief_of_staff.services.voice import VoiceMessageService
 from tests.test_ai_router import ScriptedRouter, _clock
@@ -433,3 +441,102 @@ async def test_informal_address_is_persisted(repository: SqlAlchemyTaskRepositor
     assert client.instructions is not None
     assert "ти / тебе" in client.instructions
     assert "ви / вас" in client.instructions
+
+
+def test_unknown_person_never_renders_placeholder() -> None:
+    assert format_unknown_person("") == ASK_WHICH_PERSON
+    assert format_unknown_person("—") == ASK_WHICH_PERSON
+    assert format_unknown_person("–") == ASK_WHICH_PERSON
+    assert "—" not in format_unknown_person("—")
+    assert "Боровець" in format_unknown_person("Боровець")
+
+
+def test_status_followup_inherits_person_from_snapshot() -> None:
+    snap = ConversationSnapshot(person_name="Боровець", person_query="Боровець")
+    for text, status in (
+        ("А архівні задачі?", "done"),
+        ("А виконані задачі?", "done"),
+        ("А відкриті задачі?", None),
+    ):
+        follow = parse_context_followup(text, snap, today=date(2026, 9, 17))
+        assert follow is not None, text
+        assert follow.person_query == "Боровець", text
+        assert follow.status_filter == status, text
+
+
+def test_ai_dash_person_on_status_followup_keeps_snapshot_person() -> None:
+    snap = ConversationSnapshot(person_name="Боровець", person_query="Боровець")
+    interp = UtteranceInterpretation(
+        kind=RouterKind.PEOPLE_TASKS_QUERY,
+        person_query="—",
+        query_relation=QueryRelation.NEW_QUERY,
+        status_filter="done",
+    )
+    scoped = apply_context(interp, snap, "А виконані задачі?")
+    assert scoped.query_relation == QueryRelation.REFINE_QUERY
+    assert scoped.person_query == "Боровець"
+    assert scoped.status_filter == "done"
+    assert scoped.kind == RouterKind.PEOPLE_TASKS_QUERY
+
+
+async def test_done_followup_keeps_person_not_placeholder(
+    repository: SqlAlchemyTaskRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed(repository)
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.scalar(
+                select(TaskRow).where(TaskRow.title == DOBKO_LONG)
+            )
+            assert row is not None
+            row.status = "done"
+            row.completed_at = datetime(2026, 9, 16, 12, 0, tzinfo=KYIV)
+    store = InMemoryConversationStore(_clock())
+    hostile = UtteranceInterpretation(
+        kind=RouterKind.PEOPLE_TASKS_QUERY,
+        person_query="—",
+        query_relation=QueryRelation.NEW_QUERY,
+        status_filter="done",
+    )
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(kind=RouterKind.PEOPLE_TASKS_QUERY, person_query="Добко"),
+            hostile,
+            hostile,
+        ]
+    )
+    opened = await _turn(repository, "Покажи відкриті задачі по Добко", router=router, context=store)
+    assert "«—»" not in opened.text
+    assert DOBKO_OVERDUE in opened.text
+    assert DOBKO_LONG not in opened.text
+    archived = await _turn(repository, "А архівні задачі?", router=router, context=store)
+    assert "«—»" not in archived.text
+    assert ASK_WHICH_PERSON not in archived.text
+    assert "не знайшов людину" not in archived.text.casefold()
+    assert DOBKO_LONG in archived.text
+    done = await _turn(repository, "А виконані задачі?", router=router, context=store)
+    assert "«—»" not in done.text
+    assert ASK_WHICH_PERSON not in done.text
+    assert "не знайшов людину" not in done.text.casefold()
+    assert DOBKO_LONG in done.text
+    snap = store.get(1, 1)
+    assert snap is not None
+    assert (snap.person_query or snap.person_name or "").casefold().startswith("добк")
+    assert snap.status_filter == "done"
+    named = await _turn(
+        repository,
+        "А виконані задачі по Добко?",
+        router=ScriptedRouter(
+            [
+                UtteranceInterpretation(
+                    kind=RouterKind.PEOPLE_TASKS_QUERY,
+                    person_query="Добко",
+                    status_filter="done",
+                )
+            ]
+        ),
+        context=store,
+    )
+    assert DOBKO_LONG in named.text
+    assert "«—»" not in named.text

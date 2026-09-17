@@ -12,6 +12,10 @@ from chief_of_staff.services.completion_batch import (
     looks_like_all_reference,
     split_completion_items,
 )
+from chief_of_staff.services.completion_statement import (
+    CompletionPhrasing,
+    classify_completion_phrasing,
+)
 from chief_of_staff.services.clock import KYIV
 from chief_of_staff.services.conversation_context import InMemoryConversationStore, PendingAmbiguity
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
@@ -160,6 +164,34 @@ async def _ai_first_turn(
         result = await lifecycle.handle_user_text(user_id, chat_id, text)
         _remember_assistant(context, user_id, chat_id, result.text)
         return result
+    if pending is None:
+        follow = parse_context_followup(text, snapshot, today=now.date())
+        if follow is not None:
+            result = await _dispatch_intent(
+                intake,
+                user_id,
+                chat_id,
+                text,
+                follow,
+                lifecycle=lifecycle,
+                queries=queries,
+                context=context,
+            )
+            _remember_assistant(context, user_id, chat_id, result.text)
+            return result
+        phrasing = classify_completion_phrasing(text)
+        if lifecycle is not None and phrasing in {
+            CompletionPhrasing.COMPLETED,
+            CompletionPhrasing.SHORT,
+        }:
+            result = await lifecycle.handle_intent(
+                user_id,
+                chat_id,
+                TaskIntent(kind=TaskIntentKind.COMPLETE_TASK, task_query=text),
+                raw_text=text,
+            )
+            _remember_assistant(context, user_id, chat_id, result.text)
+            return result
     interp, error = await safe_interpret(
         router, text, snapshot, now=now, pending_session=pending
     )
@@ -779,7 +811,7 @@ def _remember_query(
         task_ids=result.task_ids,
         titles=result.titles,
         person_name=result.person_name,
-        person_query=result.person_query,
+        person_query=result.person_query or result.person_name,
         project_name=result.project_name,
         status_filter=result.status_filter,
         discuss=result.discuss,

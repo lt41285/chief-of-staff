@@ -56,6 +56,7 @@ from chief_of_staff.services.lifecycle_format import (
     BTN_WAITING,
     CANCELLED,
     NEED_TASK_HINT,
+    NO_MATCHED_COMPLETION,
     NO_PENDING,
     NOT_FOUND,
     NOT_WAITING,
@@ -333,7 +334,11 @@ class TaskLifecycleService:
             )
         if len(open_tasks) == 1 and content_token_count(text) <= 2:
             return self._present_statement(user_id, chat_id, open_tasks[0], text)
-        return None
+        if is_count_only_completion(text):
+            return self._ask_which_task(user_id, chat_id, text)
+        return self._ask_which_task(
+            user_id, chat_id, text, hint=NO_MATCHED_COMPLETION
+        )
 
     def defer_to_new_task(self, user_id: int, chat_id: int) -> LifecycleResult:
         pending = self._store.get(user_id, chat_id)
@@ -371,6 +376,7 @@ class TaskLifecycleService:
             action=LifecycleAction.COMPLETE,
             original_text=original_text,
             offer_new_task=True,
+            actual_minutes=parse_actual_minutes(original_text),
         )
         return self._present_task(user_id, chat_id, task, pending)
 
@@ -473,7 +479,12 @@ class TaskLifecycleService:
         )
 
     def _ask_which_task(
-        self, user_id: int, chat_id: int, original_text: str
+        self,
+        user_id: int,
+        chat_id: int,
+        original_text: str,
+        *,
+        hint: str | None = None,
     ) -> LifecycleResult:
         """Asking «which one?» must leave state behind, or the next turn repeats it."""
         self._store.put(
@@ -483,14 +494,17 @@ class TaskLifecycleService:
                 phase=LifecyclePhase.AWAITING_TASK_REFERENCE,
                 action=LifecycleAction.COMPLETE,
                 original_text=original_text,
+                offer_new_task=hint == NO_MATCHED_COMPLETION,
             ),
         )
-        hint = (
-            ASK_LIST_COMPLETED
-            if is_count_only_completion(original_text)
-            else NEED_TASK_HINT
-        )
-        return LifecycleResult(kind=LifecycleKind.ASK_WHICH, text=hint)
+        message = hint
+        if message is None:
+            message = (
+                ASK_LIST_COMPLETED
+                if is_count_only_completion(original_text)
+                else NEED_TASK_HINT
+            )
+        return LifecycleResult(kind=LifecycleKind.ASK_WHICH, text=message)
 
     async def confirm(self, user_id: int, chat_id: int) -> LifecycleResult:
         pending = self._store.get(user_id, chat_id)

@@ -14,7 +14,9 @@ structured_query_scope in HISTORY is the previous factual query, NOT permanent
 filter state. Classify query_relation on every turn:
 - continue_query: same lookup, e.g. «розшир пошук», «подивись ще»
 - refine_query: add/change a constraint on the SAME query
-  («а прострочені?», «а на цей тиждень?», «тільки waiting»)
+  («а прострочені?», «а на цей тиждень?», «тільки waiting»,
+  «а виконані задачі?», «а архівні задачі?»). Keep the same person
+  unless THIS message names someone else.
 - correct_query: fix the entity of the active query («Добко.» after a wrong name)
 - broaden_query: REMOVE a filter («не тільки…», «не лише по ньому»,
   «покажи взагалі все», «без фільтра по людині»)
@@ -90,7 +92,8 @@ Actions (kind):
   shorter one. Python persists the alias/merge and reruns the original query.
   NEVER kind=general_chat for these. Do NOT only say «враховую».
 - general_chat: greetings and small talk («привіт», «дякую», «ок», «хмм», «зрозуміло»)
-  when there is NO pending person ambiguity.
+  when there is NO pending person ambiguity. Past-tense work reports are NEVER
+  general_chat — use complete_statement. Do not reply «прийнято» / «дякую за оновлення».
 - people_tasks_query: look up open tasks related to a person. person_query is the name
   AS THE USER MEANS IT NOW. «Хома» stays «Хома». Python decides eligibility; you cannot
   enlarge the set. If the user has free time, set available_minutes (60 for «годину»).
@@ -113,7 +116,9 @@ Actions (kind):
   «я мав на увазі наступний тиждень»). Do NOT ask «яку саме задачу?».
   Set exclude_overdue, exclude_indexes, replace_person, period, or person_query as needed.
 - create_task: new to-do. Not for questions.
-- complete_statement / complete_task: past-tense done, or explicit mark-done.
+- complete_statement / complete_task: past-tense done («я домовився», «також поговорив»,
+  «я це вже зробив»), or explicit mark-done. Python matches the task. Never only
+  acknowledge.
 - postpone_task / waiting_task / resume_task: mutations. Python confirms.
 - create_project: new project record (Python confirms).
 - retry_previous: look again / continue the same lookup. broader_search=true only then.

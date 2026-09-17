@@ -99,9 +99,9 @@ class TaskQueryService:
         return await self._list_all(user_id, intent.status_filter)
 
     async def search_people(self, user_id: int, intent: TaskIntent) -> QueryResult:
-        query = (intent.person_query or "").strip()
+        query = (intent.person_query or "").strip().strip(" —–-")
         if not query:
-            return QueryResult(kind=QueryKind.INFO, text=format_unknown_person(query or "—"))
+            return QueryResult(kind=QueryKind.INFO, text=format_unknown_person(""))
         original_query = query
         people = await self._repository.list_people_for_user(user_id)
         aliases = await self._repository.list_person_aliases_for_user(user_id)
@@ -119,7 +119,7 @@ class TaskQueryService:
         if resolved.status == "resolved" and resolved.person is not None:
             people = [resolved.person]
             search_name = resolved.person.name
-        tasks = await self._tasks_for_user(user_id, None)
+        tasks = await self._tasks_for_user(user_id, intent.status_filter)
         exclude = tuple(
             name for name in (intent.exclude_person,) if name and name.strip()
         )
@@ -166,6 +166,14 @@ class TaskQueryService:
                 exact_person=bundle.exact_person,
                 label=bundle.label,
             )
+        if intent.status_filter == "done":
+            bundle = SearchBundle(
+                query=bundle.query,
+                people=bundle.people,
+                tasks=tuple(task for task in bundle.tasks if task.status == "done"),
+                exact_person=bundle.exact_person,
+                label=bundle.label,
+            )
         if intent.task_query == "discuss":
             bundle = SearchBundle(
                 query=bundle.query,
@@ -194,9 +202,9 @@ class TaskQueryService:
         )
 
     async def _list_person(self, user_id: int, intent: TaskIntent) -> QueryResult:
-        query = (intent.person_query or "").strip()
+        query = (intent.person_query or "").strip().strip(" —–-")
         if not query:
-            return QueryResult(kind=QueryKind.INFO, text=format_unknown_person(query or "—"))
+            return QueryResult(kind=QueryKind.INFO, text=format_unknown_person(""))
         people = await self._repository.list_people_for_user(user_id)
         aliases = await self._repository.list_person_aliases_for_user(user_id)
         resolved = resolve_person_reference(query, people, aliases)
@@ -225,7 +233,7 @@ class TaskQueryService:
                 is_person_ambiguity=True,
                 ambiguity_candidates=names,
             )
-        tasks = await self._tasks_for_user(user_id, None)
+        tasks = await self._tasks_for_user(user_id, intent.status_filter)
         display_name = matched_selected.name if matched_selected is not None else query
         related: list[PlanCandidate] = []
         linked = False
@@ -286,6 +294,7 @@ class TaskQueryService:
             text,
             related,
             person_name=display_name,
+            person_query=query,
             discuss=intent.task_query == "discuss",
             status_filter=intent.status_filter,
         )
@@ -441,6 +450,7 @@ def _query_with_tasks(
     tasks: list[PlanCandidate],
     *,
     person_name: str | None = None,
+    person_query: str | None = None,
     project_name: str | None = None,
     discuss: bool = False,
     status_filter: str | None = None,
@@ -449,6 +459,7 @@ def _query_with_tasks(
         kind=QueryKind.TASKS,
         text=text,
         person_name=person_name,
+        person_query=person_query,
         project_name=project_name,
         task_ids=tuple(task.id for task in tasks),
         titles=tuple(task.title for task in tasks),

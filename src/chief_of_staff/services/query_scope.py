@@ -6,7 +6,10 @@ import re
 
 from chief_of_staff.models.utterance_intent import QueryRelation, RouterKind, UtteranceInterpretation
 from chief_of_staff.services.available_time import parse_available_time
-from chief_of_staff.services.conversation_context import ConversationSnapshot
+from chief_of_staff.services.followup_intent import (
+    followup_status_filter,
+    looks_like_status_followup,
+)
 
 INHERIT_RELATIONS = {
     QueryRelation.CONTINUE_QUERY,
@@ -147,7 +150,9 @@ def utterance_mentions_name(text: str, name: str | None) -> bool:
     if not name or not name.strip():
         return False
     folded = text.casefold()
-    token = " ".join(name.strip().casefold().split())
+    token = " ".join(name.strip().casefold().split()).strip(" —–-")
+    if not token:
+        return False
     if token in folded:
         return True
     parts = token.split()
@@ -160,12 +165,20 @@ def utterance_mentions_name(text: str, name: str | None) -> bool:
     return any(_name_stem(word) == stem for word in words)
 
 
+def clean_person_query(name: str | None) -> str | None:
+    if name is None:
+        return None
+    cleaned = " ".join(name.split()).strip(" —–-\t")
+    return cleaned or None
+
+
 def person_stated_in_utterance(interp: UtteranceInterpretation, text: str) -> str | None:
     if looks_like_drop_person_filter(text):
         return None
     for name in (interp.replace_person, interp.person_query):
-        if name and utterance_mentions_name(text, name):
-            return name
+        cleaned = clean_person_query(name)
+        if cleaned and utterance_mentions_name(text, cleaned):
+            return cleaned
     return None
 
 
@@ -185,7 +198,7 @@ def resolve_query_relation(
     stated = person_stated_in_utterance(interp, text)
     snap_person = None
     if snapshot is not None:
-        snap_person = snapshot.person_query or snapshot.person_name
+        snap_person = clean_person_query(snapshot.person_query) or snapshot.person_name
 
     if looks_like_standalone_planning(text):
         mentioned = bool(stated) or utterance_mentions_name(text, snap_person)
@@ -196,6 +209,9 @@ def resolve_query_relation(
         return QueryRelation.CONTINUE_QUERY
 
     if looks_like_refine_overdue(text) and snap_person:
+        return QueryRelation.REFINE_QUERY
+
+    if looks_like_status_followup(text) and snap_person:
         return QueryRelation.REFINE_QUERY
 
     if looks_like_global_overdue(text) and not interp.inherit_context:
@@ -329,9 +345,15 @@ def apply_query_scope(
             return interp.model_copy(update=updates)
         person = stated
         if person is None and snapshot is not None:
-            person = snapshot.person_query or snapshot.person_name
-        updates["person_query"] = person
+            person = clean_person_query(snapshot.person_query) or snapshot.person_name
+        updates["person_query"] = clean_person_query(person)
         updates["inherit_context"] = True
+        if looks_like_status_followup(text):
+            updates["status_filter"] = followup_status_filter(text)
+        elif interp.status_filter is not None:
+            updates["status_filter"] = interp.status_filter
+        elif snapshot is not None:
+            updates["status_filter"] = snapshot.status_filter
         if interp.period:
             updates["period"] = interp.period
         elif snapshot is not None and snapshot.last_period:

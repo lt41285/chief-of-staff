@@ -11,7 +11,7 @@ from chief_of_staff.models.utterance_intent import (
     RouterKind,
     UtteranceInterpretation,
 )
-from chief_of_staff.services.query_scope import apply_query_scope
+from chief_of_staff.services.query_scope import apply_query_scope, clean_person_query
 from chief_of_staff.prompts.conversation import CONVERSATION_INSTRUCTIONS
 from chief_of_staff.services.conversation_context import (
     ConversationSnapshot,
@@ -150,7 +150,7 @@ def interpretation_to_intent(interp: UtteranceInterpretation) -> TaskIntent | No
         task_query=task_query,
         project_query=interp.project_query,
         status_filter=interp.status_filter,
-        person_query=interp.person_query,
+        person_query=clean_person_query(interp.person_query),
         new_deadline=interp.deadline_on or interp.deadline,
         waiting_for=interp.waiting_for,
         task_index=interp.task_index,

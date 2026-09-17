@@ -30,6 +30,13 @@ _ORDINAL = re.compile(
 _PRONOUN = re.compile(
     r"(?i)\b(?:він|нього|йому|ним|вона|неї|їй|нею|його)\b"
 )
+_STATUS_FOLLOWUP = re.compile(
+    r"(?i)^\s*а?\s*(?:покажи(?:ть)?\s+)?"
+    r"(?P<kind>виконан[іих]+|архівн[іих]+|completed|done|waiting|"
+    r"відкрит[іих]+|open)"
+    r"(?:\s+(?:задач\w*|завдан\w*|таск\w*|tasks?))?"
+    r"\s*[.?!]?\s*$"
+)
 
 
 def parse_context_followup(
@@ -104,6 +111,17 @@ def parse_context_followup(
             kind=TaskIntentKind.PEOPLE_TASKS_QUERY,
             person_query=snapshot.person_name,
         )
+
+    status_hit, status = _status_followup(raw)
+    person = snapshot.person_query or snapshot.person_name
+    if person:
+        person = person.strip().strip(" —–-\t") or None
+    if status_hit and person:
+        return TaskIntent(
+            kind=TaskIntentKind.PEOPLE_TASKS_QUERY,
+            person_query=person,
+            status_filter=status,
+        )
     return None
 
 
@@ -125,3 +143,28 @@ def _title_at(snapshot: ConversationSnapshot, index: int | None) -> str | None:
     if pos < len(snapshot.titles):
         return snapshot.titles[pos]
     return None
+
+
+def looks_like_status_followup(text: str) -> bool:
+    raw = " ".join(text.translate(_APOS).split()).strip()
+    return _status_followup(raw)[0]
+
+
+def followup_status_filter(text: str) -> str | None:
+    """done / waiting / None(open) when the utterance is a status follow-up."""
+    raw = " ".join(text.translate(_APOS).split()).strip()
+    hit, status = _status_followup(raw)
+    return status if hit else None
+
+
+def _status_followup(raw: str) -> tuple[bool, str | None]:
+    """True when the utterance only changes status of the current person query."""
+    match = _STATUS_FOLLOWUP.match(raw)
+    if match is None:
+        return False, None
+    kind = match.group("kind").casefold()
+    if kind.startswith("виконан") or kind.startswith("архів") or kind in {"completed", "done"}:
+        return True, "done"
+    if kind == "waiting":
+        return True, "waiting"
+    return True, None
