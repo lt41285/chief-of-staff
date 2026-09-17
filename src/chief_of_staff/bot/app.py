@@ -94,21 +94,20 @@ async def _on_post_init(application: Application) -> None:
     )
 
 
-def _install_reminder_lifecycle(application: Application) -> None:
-    """Bind the loop to Application.start/stop (PTB 21 has no post_start hook)."""
-    original_start = application.start
-    original_stop = application.stop
+class ChiefOfStaffApplication(Application):
+    """Start/stop the reminder loop with the Application.
 
-    async def start_with_scheduler() -> None:
-        await original_start()
-        start_reminder_scheduler(application)
+    PTB Application uses __slots__, so instance assignment of ``start``/``stop``
+    raises AttributeError. Subclassing is the supported extension point.
+    """
 
-    async def stop_with_scheduler() -> None:
-        await stop_reminder_scheduler(application)
-        await original_stop()
+    async def start(self) -> None:
+        await super().start()
+        start_reminder_scheduler(self)
 
-    application.start = start_with_scheduler  # type: ignore[method-assign]
-    application.stop = stop_with_scheduler  # type: ignore[method-assign]
+    async def stop(self) -> None:
+        await stop_reminder_scheduler(self)
+        await super().stop()
 
 
 def build_application(settings: Settings) -> Application:
@@ -142,11 +141,11 @@ def build_application(settings: Settings) -> Application:
     conversation = InMemoryConversationStore(clock)
     application = (
         Application.builder()
+        .application_class(ChiefOfStaffApplication)
         .token(settings.telegram_bot_token)
         .post_init(_on_post_init)
         .build()
     )
-    _install_reminder_lifecycle(application)
     application.bot_data["health"] = HealthService()
     application.bot_data["task_intake"] = intake
     application.bot_data["daily_planning"] = planning

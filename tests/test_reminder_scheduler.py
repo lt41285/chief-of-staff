@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import sys
 
 import pytest
 from telegram.ext import Application
@@ -9,7 +10,7 @@ from telegram.ext import Application
 from chief_of_staff.bot.app import (
     REMINDER_TASK_KEY,
     REMINDER_TASK_NAME,
-    _install_reminder_lifecycle,
+    ChiefOfStaffApplication,
     _on_post_init,
     start_reminder_scheduler,
     stop_reminder_scheduler,
@@ -83,20 +84,43 @@ async def test_scheduler_starts_once_and_cancels_on_stop() -> None:
     await stop_reminder_scheduler(app)  # type: ignore[arg-type]
 
 
-async def test_lifecycle_hooks_start_after_running_and_cancel_before_stop() -> None:
-    app = FakeApplication(running=False)
-    _install_reminder_lifecycle(app)  # type: ignore[arg-type]
-    await app.start()
-    assert app.start_calls == 1
-    assert app.running is True
-    task = app.bot_data[REMINDER_TASK_KEY]
-    assert isinstance(task, asyncio.Task)
-    assert not task.done()
-    assert app.create_task_calls == []
-    await app.stop()
-    assert app.stop_calls == 1
-    assert task.cancelled()
-    assert REMINDER_TASK_KEY not in app.bot_data
+async def test_subclass_starts_scheduler_after_running_and_cancels_before_stop() -> None:
+    start_source = inspect.getsource(ChiefOfStaffApplication.start)
+    stop_source = inspect.getsource(ChiefOfStaffApplication.stop)
+    assert "await super().start()" in start_source
+    assert "start_reminder_scheduler(self)" in start_source
+    assert start_source.index("await super().start()") < start_source.index(
+        "start_reminder_scheduler(self)"
+    )
+    assert "await stop_reminder_scheduler(self)" in stop_source
+    assert "await super().stop()" in stop_source
+    assert stop_source.index("await stop_reminder_scheduler(self)") < stop_source.index(
+        "await super().stop()"
+    )
+
+
+def test_ptb_application_start_and_stop_are_read_only() -> None:
+    """Python 3.13 slotted Application rejects instance assignment of start/stop.
+
+    That is the production crash: wrapping Application.start after build().
+    """
+    if sys.version_info < (3, 13):
+        pytest.skip("Application.start is instance-assignable before Python 3.13")
+    app = Application.builder().token("1:AA").build()
+    with pytest.raises(AttributeError, match="read-only"):
+        app.start = app.start  # type: ignore[method-assign]
+    with pytest.raises(AttributeError, match="read-only"):
+        app.stop = app.stop  # type: ignore[method-assign]
+
+
+def test_builder_returns_chief_of_staff_application() -> None:
+    app = (
+        Application.builder()
+        .application_class(ChiefOfStaffApplication)
+        .token("1:AA")
+        .build()
+    )
+    assert type(app) is ChiefOfStaffApplication
 
 
 def test_build_application_uses_post_init_not_create_task_in_startup_source() -> None:
@@ -105,7 +129,10 @@ def test_build_application_uses_post_init_not_create_task_in_startup_source() ->
 
     source = inspect.getsource(app_mod.build_application)
     assert ".post_init(_on_post_init)" in source
+    assert ".application_class(ChiefOfStaffApplication)" in source
     assert "create_task" not in source
+    assert "application.start =" not in inspect.getsource(app_mod)
+    assert "application.stop =" not in inspect.getsource(app_mod)
     init_source = inspect.getsource(app_mod._on_post_init)
     assert "create_task" not in init_source
     assert app_mod.start_reminder_scheduler is not None
