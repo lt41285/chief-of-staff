@@ -1,6 +1,7 @@
 """Builds the python-telegram-bot Application."""
 
 import asyncio
+from typing import Any, Final
 
 from loguru import logger
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
@@ -35,6 +36,9 @@ from chief_of_staff.services.task_query import TaskQueryService
 from chief_of_staff.services.task_session import InMemoryTaskSessionStore
 from chief_of_staff.services.voice import VoiceMessageService
 
+REMINDER_TASK_KEY: Final = "reminder_task"
+REMINDER_TASK_NAME: Final = "deadline-reminders"
+
 
 async def _reminder_loop(application: Application) -> None:
     interval = int(application.bot_data["reminder_poll_seconds"])
@@ -51,14 +55,60 @@ async def _reminder_loop(application: Application) -> None:
         await asyncio.sleep(interval)
 
 
-async def _on_startup(application: Application) -> None:
+def start_reminder_scheduler(application: Application) -> asyncio.Task[Any]:
+    """Start the reminder loop once the Application is running.
+
+    Must not use Application.create_task before Application.start(): PTB 21.x only
+    tracks those tasks while running=True, and an infinite loop would also block
+    Application.stop() which awaits tracked tasks without cancelling them.
+    """
+    if not application.running:
+        raise RuntimeError("Reminder scheduler must start after Application.start()")
+    existing = application.bot_data.get(REMINDER_TASK_KEY)
+    if isinstance(existing, asyncio.Task) and not existing.done():
+        return existing
+    task = asyncio.create_task(_reminder_loop(application), name=REMINDER_TASK_NAME)
+    application.bot_data[REMINDER_TASK_KEY] = task
+    logger.info("Reminder scheduler started")
+    return task
+
+
+async def stop_reminder_scheduler(application: Application) -> None:
+    task = application.bot_data.pop(REMINDER_TASK_KEY, None)
+    if not isinstance(task, asyncio.Task):
+        return
+    if not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    logger.info("Reminder scheduler stopped")
+
+
+async def _on_post_init(application: Application) -> None:
     application.bot_data["reminders"] = ReminderService(
         get_session_factory,
         Clock(),
         BotNotifier(application.bot),
     )
-    application.create_task(_reminder_loop(application), name="deadline-reminders")
-    logger.info("Reminder scheduler started")
+
+
+def _install_reminder_lifecycle(application: Application) -> None:
+    """Bind the loop to Application.start/stop (PTB 21 has no post_start hook)."""
+    original_start = application.start
+    original_stop = application.stop
+
+    async def start_with_scheduler() -> None:
+        await original_start()
+        start_reminder_scheduler(application)
+
+    async def stop_with_scheduler() -> None:
+        await stop_reminder_scheduler(application)
+        await original_stop()
+
+    application.start = start_with_scheduler  # type: ignore[method-assign]
+    application.stop = stop_with_scheduler  # type: ignore[method-assign]
 
 
 def build_application(settings: Settings) -> Application:
@@ -93,9 +143,10 @@ def build_application(settings: Settings) -> Application:
     application = (
         Application.builder()
         .token(settings.telegram_bot_token)
-        .post_init(_on_startup)
+        .post_init(_on_post_init)
         .build()
     )
+    _install_reminder_lifecycle(application)
     application.bot_data["health"] = HealthService()
     application.bot_data["task_intake"] = intake
     application.bot_data["daily_planning"] = planning
