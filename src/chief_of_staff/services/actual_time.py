@@ -9,6 +9,13 @@ _SKIP = re.compile(
     r"^\s*(?:не\s+пам['']ятаю|не\s+знаю|пропустити|пропуск|skip|pass|не\s+треба)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
+_SKIP_ALL = re.compile(
+    r"^\s*(?:(?:пропустити|пропусти|skip)\s+(?:все|всі|усі|all)|"
+    r"(?:все|всі|усі)\s+(?:пропустити|пропусти)|"
+    r"(?:далі\s+)?не\s+питай(?:\s+(?:більше|про\s+час))?|"
+    r"більше\s+не\s+питай|skip\s+all|stop\s+asking)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
 _BARE_MINUTES = re.compile(r"^\s*(\d{1,3})\s*$")
 _HEDGE = re.compile(
     r"(?i)^\s*(?:десь|приблизно|близько|майже|about|around|roughly|~)\s+"
@@ -18,6 +25,12 @@ _HEDGE = re.compile(
 def is_skip_actual_time(text: str) -> bool:
     compact = " ".join(text.translate(_APOS).split())
     return bool(_SKIP.match(compact))
+
+
+def is_skip_all_actual_time(text: str) -> bool:
+    """True when the user wants out of the whole actual-time chain, not one task."""
+    compact = " ".join(text.translate(_APOS).split())
+    return bool(_SKIP_ALL.match(compact))
 
 
 def parse_actual_minutes(text: str, *, allow_bare: bool = False) -> int | None:
@@ -39,4 +52,8 @@ def parse_actual_minutes(text: str, *, allow_bare: bool = False) -> int | None:
 
 def is_actual_time_reply(text: str) -> bool:
     """True when the utterance is a duration or an explicit skip, in pending context."""
-    return is_skip_actual_time(text) or parse_actual_minutes(text, allow_bare=True) is not None
+    return (
+        is_skip_actual_time(text)
+        or is_skip_all_actual_time(text)
+        or parse_actual_minutes(text, allow_bare=True) is not None
+    )

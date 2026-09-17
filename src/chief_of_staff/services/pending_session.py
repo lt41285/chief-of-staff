@@ -178,6 +178,17 @@ def resolve_pending_control(
         if restart is not None and not is_actual_time_reply(text):
             return "switch"
         return "retry"
+    if pending.get("awaiting") == "task_reference":
+        if interp.kind == RouterKind.CANCEL_PENDING or action in _CANCEL_ACTIONS:
+            return "cancel"
+        if interp.kind in READ_KINDS or action in _SWITCH_ACTIONS:
+            return "switch"
+        if interp.kind in WRITE_KINDS and interp.kind not in {
+            RouterKind.COMPLETE_TASK,
+            RouterKind.COMPLETE_STATEMENT,
+        }:
+            return "switch"
+        return "continue"
     if pending.get("pending_action") == "create_task":
         if interp.kind == RouterKind.CANCEL_PENDING or action in _CANCEL_ACTIONS:
             return "cancel"
@@ -240,6 +251,8 @@ def is_plausible_field_value(pending: dict[str, Any], value: str | None) -> bool
         return len(compact) <= 40 and len(compact.split()) <= 6
     if awaiting == "actual_minutes":
         return is_actual_time_reply(compact)
+    if awaiting == "task_reference":
+        return True
     if awaiting == "strong_confirmation":
         compact = compact.replace(" ", "").casefold()
         return compact == "видалитиназавжди"

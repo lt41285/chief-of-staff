@@ -94,7 +94,8 @@ _UPDATE = re.compile(
     re.IGNORECASE,
 )
 _COMPLETE = re.compile(
-    r"(?:виконан[оаиуеим]+|познач(?:ити)?\s+як\s+(?:виконан|готов)|"
+    r"(?:виконан[оаиуеим]+|\bвикона(?:в|ла|ли)\b|"
+    r"познач(?:ити)?\s+як\s+(?:виконан|готов)|"
     r"як\s+(?:виконан[оаиуеим]+|готов[уаое])|"
     r"\bготово\b|\bdone\b|\bcompleted\b|"
     r"я\s+вже|already\s+(?:did|done|called|spoke|talked)|"
@@ -160,6 +161,9 @@ def looks_like_task_command(text: str) -> bool:
     folded = text.translate(_APOS).casefold()
     markers = (
         "виконан",
+        "виконав",
+        "виконала",
+        "виконали",
         "готово",
         "познач",
         "я вже",

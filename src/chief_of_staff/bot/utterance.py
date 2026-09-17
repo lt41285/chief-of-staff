@@ -7,7 +7,11 @@ from chief_of_staff.models.task_command import QUERY_INTENT_KINDS, TaskIntent, T
 from chief_of_staff.models.utterance_intent import QueryRelation, RouterKind, UtteranceInterpretation
 from chief_of_staff.services.actual_time import is_actual_time_reply
 from chief_of_staff.services.available_time import parse_available_time
-from chief_of_staff.services.lifecycle_format import ASK_WHICH_TIME
+from chief_of_staff.services.completion_batch import (
+    MIN_BATCH_ITEMS,
+    looks_like_all_reference,
+    split_completion_items,
+)
 from chief_of_staff.services.clock import KYIV
 from chief_of_staff.services.conversation_context import InMemoryConversationStore, PendingAmbiguity
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
@@ -139,6 +143,19 @@ async def _ai_first_turn(
         and lifecycle is not None
         and lifecycle.is_awaiting_input(user_id, chat_id)
         and is_actual_time_reply(text)
+    ):
+        result = await lifecycle.handle_user_text(user_id, chat_id, text)
+        _remember_assistant(context, user_id, chat_id, result.text)
+        return result
+    if (
+        pending is not None
+        and pending.get("awaiting") in {"task_reference", "which_task"}
+        and lifecycle is not None
+        and lifecycle.is_awaiting_input(user_id, chat_id)
+        and (
+            looks_like_all_reference(text)
+            or len(split_completion_items(text)) >= MIN_BATCH_ITEMS
+        )
     ):
         result = await lifecycle.handle_user_text(user_id, chat_id, text)
         _remember_assistant(context, user_id, chat_id, result.text)
@@ -530,8 +547,9 @@ async def _execute_pending_control(
         _remember_assistant(context, user_id, chat_id, result.text)
         return result
     if control == "retry":
-        if pending.get("awaiting") == "actual_minutes":
-            result = LifecycleResult(kind=LifecycleKind.ASK_ACTUAL, text=ASK_WHICH_TIME)
+        if pending.get("awaiting") == "actual_minutes" and lifecycle is not None:
+            # The service re-asks once, then lets the chain move on.
+            result = await lifecycle.handle_user_text(user_id, chat_id, text)
             _remember_assistant(context, user_id, chat_id, result.text)
             return result
         return QueryResult(kind=QueryKind.INFO, text=PENDING_INTERPRET_FAILED)

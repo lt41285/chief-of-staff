@@ -15,7 +15,19 @@ from chief_of_staff.infrastructure.database.repository import (
 from chief_of_staff.services.names import normalize_entity_name
 from chief_of_staff.models.plan import PlanCandidate
 from chief_of_staff.models.task_command import TaskIntent, TaskIntentKind
-from chief_of_staff.services.actual_time import is_skip_actual_time, parse_actual_minutes
+from chief_of_staff.services.actual_time import (
+    is_skip_actual_time,
+    is_skip_all_actual_time,
+    parse_actual_minutes,
+)
+from chief_of_staff.services.completion_batch import (
+    MIN_BATCH_ITEMS,
+    BatchMatch,
+    is_count_only_completion,
+    looks_like_all_reference,
+    match_completion_batch,
+    split_completion_items,
+)
 from chief_of_staff.services.completion_statement import (
     CompletionPhrasing,
     classify_completion_phrasing,
@@ -29,12 +41,14 @@ from chief_of_staff.services.lifecycle_format import (
     ALREADY_DONE,
     ASK_ACTUAL,
     ASK_DEADLINE,
+    ASK_LIST_COMPLETED,
     format_actual_recorded,
     ASK_WHICH,
     ASK_WHICH_POSTPONE,
     ASK_WHICH_RESUME,
     ASK_WHICH_TIME,
     ASK_WHICH_WAITING,
+    BTN_ALL_DONE,
     BTN_DONE,
     BTN_YES_DONE,
     BTN_POSTPONE,
@@ -47,8 +61,12 @@ from chief_of_staff.services.lifecycle_format import (
     NOT_WAITING,
     RESUMED,
     SEPARATE_ACTIONS,
+    SKIPPED_ACTUAL_ALL,
     UNSUPPORTED,
     WAITING_SET,
+    format_ask_actual_for,
+    format_batch_complete_preview,
+    format_batch_completed,
     format_choice_list,
     format_complete_preview,
     format_statement_complete_preview,
@@ -89,6 +107,7 @@ _YES = frozenset(
 )
 _CANCEL = frozenset({"ні", "нет", "no", "скасувати", "cancel"})
 _PICK = re.compile(r"^\s*(\d{1,2})\s*[.)]?\s*$")
+_MAX_REFERENCE_CHOICES = 8
 _LIFECYCLE_KINDS = frozenset(
     {
         TaskIntentKind.COMPLETE_TASK,
@@ -151,6 +170,24 @@ class TaskLifecycleService:
                 "task_id": str(pending.task_id) if pending.task_id else None,
                 "draft": {
                     "task_id": str(pending.task_id) if pending.task_id else None,
+                    "task_title": pending.current_title,
+                    "remaining_tasks": len(pending.actual_queue),
+                },
+            }
+        if pending.phase == LifecyclePhase.AWAITING_TASK_REFERENCE:
+            return {
+                "pending_action": "complete_task",
+                "awaiting": "task_reference",
+                "task_id": None,
+                "draft": {"original_text": pending.original_text},
+            }
+        if pending.phase == LifecyclePhase.CONFIRMING_BATCH:
+            return {
+                "pending_action": "complete_task",
+                "awaiting": "confirmation",
+                "task_id": None,
+                "draft": {
+                    "task_titles": [title for _task_id, title in pending.batch_items],
                 },
             }
         awaiting = {
@@ -193,7 +230,8 @@ class TaskLifecycleService:
             if pending.offer_new_task and is_new_task_override(text):
                 return self.defer_to_new_task(user_id, chat_id)
             if (
-                pending.phase == LifecyclePhase.CONFIRMING
+                pending.phase
+                in {LifecyclePhase.CONFIRMING, LifecyclePhase.CONFIRMING_BATCH}
                 and pending.action == LifecycleAction.COMPLETE
                 and classify_completion_phrasing(text) == CompletionPhrasing.SHORT
             ):
@@ -238,6 +276,11 @@ class TaskLifecycleService:
             return LifecycleResult(kind=LifecycleKind.INFO, text=NOT_FOUND)
         actual = parse_actual_minutes(raw_text or intent.task_query or "")
         query = (intent.task_query or "").strip()
+        if is_count_only_completion(raw_text):
+            query = ""
+        batch = await self._batch_from_text(user_id, chat_id, raw_text)
+        if batch is not None:
+            return batch
         phrasing = classify_completion_phrasing(raw_text)
         if phrasing in {CompletionPhrasing.COMPLETED, CompletionPhrasing.SHORT} or not query:
             statement = await self.consider_completed_statement(
@@ -246,7 +289,7 @@ class TaskLifecycleService:
             if statement is not None:
                 return statement
             if not query:
-                return LifecycleResult(kind=LifecycleKind.INFO, text=NEED_TASK_HINT)
+                return self._ask_which_task(user_id, chat_id, raw_text)
         return await self._resolve_and_present(
             user_id,
             chat_id,
@@ -267,6 +310,9 @@ class TaskLifecycleService:
         if not completed:
             return None
         open_tasks = await self._repository.list_user_tasks(user_id)
+        batch = self._consider_batch(user_id, chat_id, text, open_tasks)
+        if batch is not None:
+            return batch
         if phrasing == CompletionPhrasing.SHORT:
             if len(open_tasks) == 1:
                 return self._present_statement(user_id, chat_id, open_tasks[0], text)
@@ -277,7 +323,7 @@ class TaskLifecycleService:
                 return self._present_statement_choices(
                     user_id, chat_id, matched.candidates, text
                 )
-            return LifecycleResult(kind=LifecycleKind.INFO, text=NEED_TASK_HINT)
+            return self._ask_which_task(user_id, chat_id, text)
         matched = match_completion_statement(text, open_tasks)
         if matched.selected is not None:
             return self._present_statement(user_id, chat_id, matched.selected, text)
@@ -351,8 +397,105 @@ class TaskLifecycleService:
             choice_count=len(candidates),
         )
 
+    async def _batch_from_text(
+        self, user_id: int, chat_id: int, text: str
+    ) -> LifecycleResult | None:
+        """A list of several tasks is a batch whatever the phrasing around it."""
+        if len(split_completion_items(text)) < MIN_BATCH_ITEMS:
+            return None
+        open_tasks = await self._repository.list_user_tasks(user_id)
+        return self._consider_batch(user_id, chat_id, text, open_tasks)
+
+    def _consider_batch(
+        self,
+        user_id: int,
+        chat_id: int,
+        text: str,
+        open_tasks: list[PlanCandidate],
+    ) -> LifecycleResult | None:
+        """Engage the batch flow only when the message really names several tasks."""
+        items = split_completion_items(text)
+        if len(items) < MIN_BATCH_ITEMS:
+            return None
+        matched = match_completion_batch(items, open_tasks, today=self._today())
+        if len(matched.tasks) < MIN_BATCH_ITEMS:
+            return None
+        return self._present_batch(user_id, chat_id, matched, text)
+
+    def _present_batch(
+        self,
+        user_id: int,
+        chat_id: int,
+        matched: BatchMatch,
+        original_text: str,
+    ) -> LifecycleResult:
+        self._store.put(
+            user_id,
+            chat_id,
+            PendingLifecycle(
+                phase=LifecyclePhase.CONFIRMING_BATCH,
+                action=LifecycleAction.COMPLETE,
+                batch_items=tuple((task.id, task.title) for task in matched.tasks),
+                unmatched_items=matched.unmatched,
+                original_text=original_text,
+            ),
+        )
+        return LifecycleResult(
+            kind=LifecycleKind.ASK_CONFIRM,
+            text=format_batch_complete_preview(matched.tasks, matched.unmatched),
+            show_confirm_buttons=True,
+            confirm_label=BTN_ALL_DONE,
+        )
+
+    async def _present_batch_from_ids(
+        self,
+        user_id: int,
+        chat_id: int,
+        task_ids: tuple[UUID, ...],
+        original_text: str,
+    ) -> LifecycleResult:
+        """«всі» after a numbered choice list — take every candidate shown."""
+        tasks: list[PlanCandidate] = []
+        for task_id in task_ids:
+            task = await self._repository.get_user_task(user_id, task_id)
+            if task is not None and task.status not in {"done", "cancelled"}:
+                tasks.append(task)
+        if not tasks:
+            self._store.clear(user_id, chat_id)
+            return LifecycleResult(kind=LifecycleKind.INFO, text=NOT_FOUND)
+        if len(tasks) == 1:
+            return self._present_statement(user_id, chat_id, tasks[0], original_text)
+        return self._present_batch(
+            user_id,
+            chat_id,
+            BatchMatch(tasks=tuple(tasks), unmatched=()),
+            original_text,
+        )
+
+    def _ask_which_task(
+        self, user_id: int, chat_id: int, original_text: str
+    ) -> LifecycleResult:
+        """Asking «which one?» must leave state behind, or the next turn repeats it."""
+        self._store.put(
+            user_id,
+            chat_id,
+            PendingLifecycle(
+                phase=LifecyclePhase.AWAITING_TASK_REFERENCE,
+                action=LifecycleAction.COMPLETE,
+                original_text=original_text,
+            ),
+        )
+        hint = (
+            ASK_LIST_COMPLETED
+            if is_count_only_completion(original_text)
+            else NEED_TASK_HINT
+        )
+        return LifecycleResult(kind=LifecycleKind.ASK_WHICH, text=hint)
+
     async def confirm(self, user_id: int, chat_id: int) -> LifecycleResult:
         pending = self._store.get(user_id, chat_id)
+        if pending is not None and pending.phase == LifecyclePhase.CONFIRMING_BATCH:
+            return await self._mark_batch_done(user_id, chat_id, pending)
         if pending is None or pending.phase != LifecyclePhase.CONFIRMING or pending.task_id is None:
             return LifecycleResult(kind=LifecycleKind.INFO, text=NO_PENDING)
         if pending.action == LifecycleAction.POSTPONE:
@@ -561,12 +704,25 @@ class TaskLifecycleService:
                 return LifecycleResult(kind=LifecycleKind.INFO, text=NOT_FOUND)
             pending.new_deadline = deadline
             return self._present_task(user_id, chat_id, task, pending)
+        if pending.phase == LifecyclePhase.AWAITING_TASK_REFERENCE:
+            if compact in _CANCEL:
+                return self.cancel(user_id, chat_id)
+            return await self._resolve_task_reference(user_id, chat_id, pending, text)
         if pending.phase == LifecyclePhase.CHOOSING:
             pick = _PICK.match(text)
             if pick:
                 return await self.choose(user_id, chat_id, int(pick.group(1)) - 1)
             if compact in _CANCEL:
                 return self.cancel(user_id, chat_id)
+            if looks_like_all_reference(text) and len(pending.candidate_ids) >= MIN_BATCH_ITEMS:
+                return await self._present_batch_from_ids(
+                    user_id,
+                    chat_id,
+                    pending.candidate_ids,
+                    pending.original_text or text,
+                )
+            if len(split_completion_items(text)) >= MIN_BATCH_ITEMS:
+                return await self._complete_from_reference(user_id, chat_id, text)
             return LifecycleResult(
                 kind=LifecycleKind.ASK_WHICH,
                 text="Обери номер зі списку або натисни кнопку.",
@@ -574,29 +730,81 @@ class TaskLifecycleService:
                 show_statement_buttons=pending.offer_new_task,
                 choice_count=len(pending.candidate_ids),
             )
-        if pending.phase == LifecyclePhase.CONFIRMING:
+        if pending.phase in {LifecyclePhase.CONFIRMING, LifecyclePhase.CONFIRMING_BATCH}:
             if compact in _YES:
                 return await self.confirm(user_id, chat_id)
             if compact in _CANCEL:
                 return self.cancel(user_id, chat_id)
+            batch = pending.phase == LifecyclePhase.CONFIRMING_BATCH
             return LifecycleResult(
                 kind=LifecycleKind.ASK_CONFIRM,
                 text="Підтверди або скасуй кнопками, або напиши «так» / «скасувати».",
                 show_confirm_buttons=True,
                 show_statement_buttons=pending.offer_new_task,
-                confirm_label=_label_for(pending.action, pending.offer_new_task),
+                confirm_label=BTN_ALL_DONE
+                if batch
+                else _label_for(pending.action, pending.offer_new_task),
             )
-        if is_skip_actual_time(text):
+        if is_skip_all_actual_time(text):
             self._store.clear(user_id, chat_id)
-            return LifecycleResult(kind=LifecycleKind.DONE, text=format_completed_message(None))
+            return LifecycleResult(kind=LifecycleKind.DONE, text=SKIPPED_ACTUAL_ALL)
+        if is_skip_actual_time(text):
+            return self._advance_actual(user_id, chat_id, pending, saved=None)
         minutes = parse_actual_minutes(text, allow_bare=True)
         if minutes is None or pending.task_id is None:
-            return LifecycleResult(kind=LifecycleKind.ASK_ACTUAL, text=ASK_WHICH_TIME)
+            if pending.task_id is not None and pending.retry_count == 0:
+                pending.retry_count = 1
+                self._store.put(user_id, chat_id, pending)
+                return LifecycleResult(kind=LifecycleKind.ASK_ACTUAL, text=ASK_WHICH_TIME)
+            return self._advance_actual(user_id, chat_id, pending, saved=None)
         saved = await self._repository.set_actual_minutes(user_id, pending.task_id, minutes)
-        self._store.clear(user_id, chat_id)
         if not saved:
+            self._store.clear(user_id, chat_id)
             return LifecycleResult(kind=LifecycleKind.INFO, text=NOT_FOUND)
-        return LifecycleResult(kind=LifecycleKind.DONE, text=format_actual_recorded(minutes))
+        return self._advance_actual(user_id, chat_id, pending, saved=minutes)
+
+    async def _resolve_task_reference(
+        self,
+        user_id: int,
+        chat_id: int,
+        pending: PendingLifecycle,
+        text: str,
+    ) -> LifecycleResult:
+        """The reply to «яку саме?» — a list, a name, or «всі» pointing back."""
+        source = text
+        if looks_like_all_reference(text):
+            earlier = pending.original_text or ""
+            if len(split_completion_items(earlier)) < MIN_BATCH_ITEMS:
+                return await self._offer_open_task_choices(user_id, chat_id, earlier or text)
+            source = earlier
+        return await self._complete_from_reference(user_id, chat_id, source)
+
+    async def _offer_open_task_choices(
+        self, user_id: int, chat_id: int, original_text: str
+    ) -> LifecycleResult:
+        """«всі» with nothing to point at: show what there is instead of re-asking."""
+        open_tasks = await self._repository.list_user_tasks(user_id)
+        if MIN_BATCH_ITEMS <= len(open_tasks) <= _MAX_REFERENCE_CHOICES:
+            return self._present_statement_choices(
+                user_id, chat_id, tuple(open_tasks), original_text
+            )
+        return LifecycleResult(kind=LifecycleKind.ASK_WHICH, text=ASK_LIST_COMPLETED)
+
+    async def _complete_from_reference(
+        self, user_id: int, chat_id: int, source: str
+    ) -> LifecycleResult:
+        """A named reference is a batch first; a single task keeps the old path."""
+        open_tasks = await self._repository.list_user_tasks(user_id)
+        batch = self._consider_batch(user_id, chat_id, source, open_tasks)
+        if batch is not None:
+            return batch
+        self._store.clear(user_id, chat_id)
+        return await self.handle_intent(
+            user_id,
+            chat_id,
+            TaskIntent(kind=TaskIntentKind.COMPLETE_TASK, task_query=source),
+            raw_text=source,
+        )
 
     async def _apply_postpone(
         self, user_id: int, chat_id: int, pending: PendingLifecycle
@@ -639,6 +847,81 @@ class TaskLifecycleService:
         if outcome != "updated":
             return LifecycleResult(kind=LifecycleKind.INFO, text=NOT_FOUND)
         return LifecycleResult(kind=LifecycleKind.DONE, text=RESUMED)
+
+    async def _mark_batch_done(
+        self,
+        user_id: int,
+        chat_id: int,
+        pending: PendingLifecycle,
+    ) -> LifecycleResult:
+        completed: list[tuple[UUID, str]] = []
+        moment = self._clock.now()
+        for task_id, title in pending.batch_items:
+            outcome = await self._repository.complete_user_task(
+                user_id,
+                task_id,
+                completed_at=moment,
+                actual_minutes=None,
+            )
+            if outcome == "completed":
+                completed.append((task_id, title))
+        if not completed:
+            self._store.clear(user_id, chat_id)
+            return LifecycleResult(kind=LifecycleKind.INFO, text=ALREADY_DONE)
+        head_id, head_title = completed[0]
+        self._store.put(
+            user_id,
+            chat_id,
+            PendingLifecycle(
+                phase=LifecyclePhase.AWAITING_ACTUAL,
+                action=LifecycleAction.COMPLETE,
+                task_id=head_id,
+                current_title=head_title,
+                actual_queue=tuple(completed[1:]),
+            ),
+        )
+        return LifecycleResult(
+            kind=LifecycleKind.ASK_ACTUAL,
+            text=(
+                f"{format_batch_completed(len(completed))}\n\n"
+                f"{format_ask_actual_for(head_title)}"
+            ),
+        )
+
+    def _advance_actual(
+        self,
+        user_id: int,
+        chat_id: int,
+        pending: PendingLifecycle,
+        *,
+        saved: int | None,
+    ) -> LifecycleResult:
+        """Move to the next completed task, or finish the chain."""
+        if not pending.actual_queue:
+            self._store.clear(user_id, chat_id)
+            if saved is not None:
+                return LifecycleResult(
+                    kind=LifecycleKind.DONE, text=format_actual_recorded(saved)
+                )
+            return LifecycleResult(
+                kind=LifecycleKind.DONE, text=format_completed_message(None)
+            )
+        next_id, next_title = pending.actual_queue[0]
+        self._store.put(
+            user_id,
+            chat_id,
+            PendingLifecycle(
+                phase=LifecyclePhase.AWAITING_ACTUAL,
+                action=LifecycleAction.COMPLETE,
+                task_id=next_id,
+                current_title=next_title,
+                actual_queue=pending.actual_queue[1:],
+            ),
+        )
+        question = format_ask_actual_for(next_title)
+        if saved is not None:
+            question = f"{format_actual_recorded(saved)}\n\n{question}"
+        return LifecycleResult(kind=LifecycleKind.ASK_ACTUAL, text=question)
 
     async def _mark_done(
         self,

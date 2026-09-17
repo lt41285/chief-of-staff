@@ -9,8 +9,10 @@ from uuid import UUID
 class LifecyclePhase(StrEnum):
     CHOOSING = "choosing"
     CONFIRMING = "confirming"
+    CONFIRMING_BATCH = "confirming_batch"
     AWAITING_ACTUAL = "awaiting_actual"
     AWAITING_DEADLINE = "awaiting_deadline"
+    AWAITING_TASK_REFERENCE = "awaiting_task_reference"
 
 
 class LifecycleAction(StrEnum):
@@ -31,6 +33,11 @@ class PendingLifecycle:
     waiting_for: str | None = None
     original_text: str | None = None
     offer_new_task: bool = False
+    batch_items: tuple[tuple[UUID, str], ...] = ()
+    unmatched_items: tuple[str, ...] = ()
+    actual_queue: tuple[tuple[UUID, str], ...] = ()
+    current_title: str | None = None
+    retry_count: int = 0
 
 
 class InMemoryLifecycleStore:

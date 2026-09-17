@@ -30,9 +30,12 @@ SEPARATE_ACTIONS = (
 )
 ASK_WHICH_TIME = "Напиши час, наприклад «35 хв», або «пропустити»."
 NEED_TASK_HINT = "Уточни, яку саме задачу маєш на увазі."
+ASK_LIST_COMPLETED = "Перелічи задачі, які ти виконав — кожну з нового рядка."
+SKIPPED_ACTUAL_ALL = "Добре, більше не питаю про час."
 NOT_WAITING = "Ця задача не у waiting."
 BTN_DONE = "✅ Виконано"
 BTN_YES_DONE = "✅ Так, виконано"
+BTN_ALL_DONE = "✅ Так, усі виконані"
 BTN_NEW_TASK = "➕ Це нова задача"
 BTN_POSTPONE = "✅ Перенести"
 BTN_WAITING = "✅ Waiting"
@@ -55,6 +58,38 @@ def format_statement_complete_preview(task: PlanCandidate) -> str:
         f"✅ {task.title}\n\n"
         "Позначити виконаною?"
     )
+
+
+def format_batch_complete_preview(
+    tasks: tuple[PlanCandidate, ...],
+    unmatched: tuple[str, ...] = (),
+) -> str:
+    lines = [f"Схоже, ти виконав ці задачі ({len(tasks)}):", ""]
+    lines.extend(f"✅ {task.title}" for task in tasks)
+    if unmatched:
+        lines.extend(["", "Не зміг зіставити:"])
+        lines.extend(f"• {item}" for item in unmatched)
+    lines.extend(["", "Позначити виконаними?"])
+    return "\n".join(lines)
+
+
+def format_batch_completed(count: int) -> str:
+    return f"✅ Позначено виконаними: {count} {_task_word(count)}."
+
+
+def format_ask_actual_for(title: str) -> str:
+    return f"⏱ Скільки часу зайняла: «{title}»?"
+
+
+def _task_word(count: int) -> str:
+    if count % 100 in range(11, 15):
+        return "задач"
+    last = count % 10
+    if last == 1:
+        return "задача"
+    if last in (2, 3, 4):
+        return "задачі"
+    return "задач"
 
 
 def format_postpone_preview(task: PlanCandidate, new_deadline: date) -> str:
