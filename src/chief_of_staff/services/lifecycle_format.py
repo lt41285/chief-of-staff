@@ -95,5 +95,9 @@ def format_completed_message(actual_minutes: int | None) -> str:
     return f"{COMPLETED}\n⏱ Фактично: {format_duration(actual_minutes)}"
 
 
+def format_actual_recorded(minutes: int) -> str:
+    return f"✅ Записав: {format_duration(minutes)}."
+
+
 def format_postponed_message(new_deadline: date) -> str:
     return f"{POSTPONED}\n📅 Новий дедлайн: {format_uk_date(new_deadline)}"

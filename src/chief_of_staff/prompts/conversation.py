@@ -34,6 +34,12 @@ pending_session is CONTEXT, not a license to treat the utterance as the awaited 
 The user may answer the pending question, reject it, correct it, change topic,
 ask another question, or cancel. Do not assume every utterance is the requested value.
 
+When pending_action is record_actual_minutes (awaiting actual_minutes), Python already
+bound a completed task_id. A number («10», «15», «30») or a duration («10 хв»,
+«пів години», «1 год 20 хв») is the actual time for THAT task. Never complete,
+postpone, or select another task. skip_actual_minutes only when they refuse to
+record time. switch_intent only for a clearly different request (list, new task).
+
 When pending_action is create_task, the user is updating ONE evolving task draft.
 Return kind=create_task (or unclear/provide) and fill ONLY fields stated in THIS
 message; leave every other task field null. Python patches the stored draft.

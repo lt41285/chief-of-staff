@@ -7,11 +7,17 @@ import re
 from typing import Any
 
 from chief_of_staff.models.utterance_intent import RouterKind, UtteranceInterpretation
+from chief_of_staff.services.actual_time import (
+    is_actual_time_reply,
+    is_skip_actual_time,
+    parse_actual_minutes,
+)
 from chief_of_staff.services.project_intent import (
     looks_like_explicit_project_create,
     looks_like_list_archived_projects,
     looks_like_list_projects,
 )
+from chief_of_staff.services.task_command_intent import parse_task_intent_deterministic
 
 PENDING_INTERPRET_FAILED = (
     "Не вдалося зрозуміти відповідь. Спробуй ще раз або натисни Скасувати."
@@ -152,6 +158,26 @@ def resolve_pending_control(
     if pending is None:
         return None
     action = (interp.pending_action or "").strip()
+    if _awaiting_actual_minutes(pending):
+        if interp.kind == RouterKind.CANCEL_PENDING or action in _CANCEL_ACTIONS:
+            return "cancel"
+        if is_skip_actual_time(text) or interp.skip_actual_minutes:
+            return "continue"
+        if parse_actual_minutes(text, allow_bare=True) is not None:
+            return "provide"
+        if interp.kind in READ_KINDS:
+            return "switch"
+        if interp.kind in WRITE_KINDS and interp.kind not in {
+            RouterKind.COMPLETE_TASK,
+            RouterKind.COMPLETE_STATEMENT,
+            RouterKind.PROVIDE_PENDING_VALUE,
+            RouterKind.CONTINUE_PENDING,
+        }:
+            return "switch"
+        restart = parse_task_intent_deterministic(text)
+        if restart is not None and not is_actual_time_reply(text):
+            return "switch"
+        return "retry"
     if pending.get("pending_action") == "create_task":
         if interp.kind == RouterKind.CANCEL_PENDING or action in _CANCEL_ACTIONS:
             return "cancel"
@@ -213,7 +239,7 @@ def is_plausible_field_value(pending: dict[str, Any], value: str | None) -> bool
     if awaiting in {"deadline", "new_deadline"}:
         return len(compact) <= 40 and len(compact.split()) <= 6
     if awaiting == "actual_minutes":
-        return True
+        return is_actual_time_reply(compact)
     if awaiting == "strong_confirmation":
         compact = compact.replace(" ", "").casefold()
         return compact == "видалитиназавжди"
@@ -265,6 +291,17 @@ def _same_mutation(interp: UtteranceInterpretation, pending: dict[str, Any]) -> 
         return kind == RouterKind.WAITING_TASK
     if wanted == "resume_task":
         return kind == RouterKind.RESUME_TASK
+    if wanted == "record_actual_minutes":
+        return kind in {
+            RouterKind.PROVIDE_PENDING_VALUE,
+            RouterKind.CONTINUE_PENDING,
+        }
     if wanted == "daily_plan":
         return kind in CONTROL_KINDS
     return False
+
+
+def _awaiting_actual_minutes(pending: dict[str, Any]) -> bool:
+    return pending.get("awaiting") == "actual_minutes" or pending.get(
+        "pending_action"
+    ) == "record_actual_minutes"

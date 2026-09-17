@@ -112,6 +112,9 @@ def test_parses_actual_durations() -> None:
     assert parse_actual_minutes("45 хвилин") == 45
     assert parse_actual_minutes("1 година") == 60
     assert parse_actual_minutes("1 год 20 хв") == 80
+    assert parse_actual_minutes("десь 45 хвилин") == 45
+    assert parse_actual_minutes("10", allow_bare=True) == 10
+    assert parse_actual_minutes("10") is None
     assert parse_actual_minutes("не пам'ятаю") is None
     assert parse_actual_minutes("пропустити") is None
 

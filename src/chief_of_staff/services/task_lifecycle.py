@@ -29,6 +29,7 @@ from chief_of_staff.services.lifecycle_format import (
     ALREADY_DONE,
     ASK_ACTUAL,
     ASK_DEADLINE,
+    format_actual_recorded,
     ASK_WHICH,
     ASK_WHICH_POSTPONE,
     ASK_WHICH_RESUME,
@@ -143,9 +144,17 @@ class TaskLifecycleService:
         pending = self._store.get(user_id, chat_id)
         if pending is None:
             return None
+        if pending.phase == LifecyclePhase.AWAITING_ACTUAL:
+            return {
+                "pending_action": "record_actual_minutes",
+                "awaiting": "actual_minutes",
+                "task_id": str(pending.task_id) if pending.task_id else None,
+                "draft": {
+                    "task_id": str(pending.task_id) if pending.task_id else None,
+                },
+            }
         awaiting = {
             LifecyclePhase.AWAITING_DEADLINE: "deadline",
-            LifecyclePhase.AWAITING_ACTUAL: "actual_minutes",
             LifecyclePhase.CONFIRMING: "confirmation",
             LifecyclePhase.CHOOSING: "which_task",
         }[pending.phase]
@@ -154,6 +163,7 @@ class TaskLifecycleService:
             if pending.action.value != "complete"
             else "complete_task",
             "awaiting": awaiting,
+            "task_id": str(pending.task_id) if pending.task_id else None,
             "draft": {
                 "task_id": str(pending.task_id) if pending.task_id else None,
                 "new_deadline": pending.new_deadline.isoformat() if pending.new_deadline else None,
@@ -586,7 +596,7 @@ class TaskLifecycleService:
         self._store.clear(user_id, chat_id)
         if not saved:
             return LifecycleResult(kind=LifecycleKind.INFO, text=NOT_FOUND)
-        return LifecycleResult(kind=LifecycleKind.DONE, text=format_completed_message(minutes))
+        return LifecycleResult(kind=LifecycleKind.DONE, text=format_actual_recorded(minutes))
 
     async def _apply_postpone(
         self, user_id: int, chat_id: int, pending: PendingLifecycle
@@ -658,7 +668,11 @@ class TaskLifecycleService:
         self._store.put(
             user_id,
             chat_id,
-            PendingLifecycle(phase=LifecyclePhase.AWAITING_ACTUAL, task_id=task_id),
+            PendingLifecycle(
+                phase=LifecyclePhase.AWAITING_ACTUAL,
+                action=LifecycleAction.COMPLETE,
+                task_id=task_id,
+            ),
         )
         return LifecycleResult(
             kind=LifecycleKind.ASK_ACTUAL,

@@ -5,7 +5,9 @@ from datetime import datetime
 from chief_of_staff.models.project_command import ProjectIntent, ProjectIntentKind
 from chief_of_staff.models.task_command import QUERY_INTENT_KINDS, TaskIntent, TaskIntentKind
 from chief_of_staff.models.utterance_intent import QueryRelation, RouterKind, UtteranceInterpretation
+from chief_of_staff.services.actual_time import is_actual_time_reply
 from chief_of_staff.services.available_time import parse_available_time
+from chief_of_staff.services.lifecycle_format import ASK_WHICH_TIME
 from chief_of_staff.services.clock import KYIV
 from chief_of_staff.services.conversation_context import InMemoryConversationStore, PendingAmbiguity
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
@@ -131,6 +133,16 @@ async def _ai_first_turn(
         user_id=user_id,
         chat_id=chat_id,
     )
+    if (
+        pending is not None
+        and pending.get("awaiting") == "actual_minutes"
+        and lifecycle is not None
+        and lifecycle.is_awaiting_input(user_id, chat_id)
+        and is_actual_time_reply(text)
+    ):
+        result = await lifecycle.handle_user_text(user_id, chat_id, text)
+        _remember_assistant(context, user_id, chat_id, result.text)
+        return result
     interp, error = await safe_interpret(
         router, text, snapshot, now=now, pending_session=pending
     )
@@ -518,6 +530,10 @@ async def _execute_pending_control(
         _remember_assistant(context, user_id, chat_id, result.text)
         return result
     if control == "retry":
+        if pending.get("awaiting") == "actual_minutes":
+            result = LifecycleResult(kind=LifecycleKind.ASK_ACTUAL, text=ASK_WHICH_TIME)
+            _remember_assistant(context, user_id, chat_id, result.text)
+            return result
         return QueryResult(kind=QueryKind.INFO, text=PENDING_INTERPRET_FAILED)
     if control == "keep_chat":
         result = QueryResult(
@@ -546,7 +562,9 @@ async def _execute_pending_control(
         _remember_assistant(context, user_id, chat_id, fed.text)
         return fed
     if control == "provide":
-        value = interp.provided_value or interp.project or interp.project_query or text
+        value = text if pending.get("awaiting") == "actual_minutes" else (
+            interp.provided_value or interp.project or interp.project_query or text
+        )
         if not is_plausible_field_value(pending, value):
             return QueryResult(kind=QueryKind.INFO, text=PENDING_INTERPRET_FAILED)
         fed = await _feed_pending_value(

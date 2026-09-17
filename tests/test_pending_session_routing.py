@@ -19,6 +19,7 @@ from chief_of_staff.services.conversation_context import (
     InMemoryConversationStore,
     PendingAmbiguity,
 )
+from chief_of_staff.services.lifecycle_format import ASK_WHICH_TIME
 from chief_of_staff.services.lifecycle_format import CANCELLED as LIFE_CANCELLED
 from chief_of_staff.services.lifecycle_format import COMPLETED
 from chief_of_staff.services.lifecycle_session import InMemoryLifecycleStore
@@ -418,3 +419,196 @@ async def test_openai_failure_while_pending_does_not_consume_text(
     assert ops.describe_pending(1, 1)["awaiting"] == "project_name"
     assert await _project_count(session_factory) == before
     assert "Створити проєкт" not in result.text
+
+
+STRATEGIC = "Поговорити про можливе ведення обліку стратегічних проектів"
+BONUSES = "Виплатити премії лідерів Ліді Верещинській і Ірині Спасській"
+
+
+async def test_bare_number_records_actual_minutes_on_completed_task_not_another(
+    repository: SqlAlchemyTaskRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    done_id = await persist(
+        repository,
+        complete_draft(project="BG", task_title=STRATEGIC, people=()),
+        user=1,
+        chat=1,
+    )
+    other_id = await persist(
+        repository,
+        complete_draft(project="BG", task_title=BONUSES, people=()),
+        user=1,
+        chat=1,
+    )
+    life = TaskLifecycleService(repository, InMemoryLifecycleStore(), _clock())
+    asked = await life.handle_user_text(1, 1, f"виконано {STRATEGIC}")
+    assert asked.kind == LifecycleKind.ASK_CONFIRM
+    done = await life.confirm(1, 1)
+    assert done.kind == LifecycleKind.ASK_ACTUAL
+    pending = life.describe_pending(1, 1)
+    assert pending is not None
+    assert pending["pending_action"] == "record_actual_minutes"
+    assert pending["awaiting"] == "actual_minutes"
+    assert pending["task_id"] == str(done_id)
+
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.COMPLETE_TASK,
+                pending_action="switch_intent",
+                task_query=BONUSES,
+                task_index=10,
+            )
+        ]
+    )
+    result = await _turn(
+        repository,
+        "10",
+        router=router,
+        lifecycle=life,
+        projects=_ops(repository),
+    )
+    assert router.calls == []
+    assert result.kind == LifecycleKind.DONE
+    assert result.text == "✅ Записав: 10 хв."
+    assert BONUSES not in result.text
+    assert LIFE_CANCELLED not in result.text
+    assert life.describe_pending(1, 1) is None
+    async with session_factory() as session:
+        completed = await session.get(TaskRow, done_id)
+        other = await session.get(TaskRow, other_id)
+        assert completed is not None and other is not None
+        assert completed.status == "done"
+        assert completed.actual_minutes == 10
+        assert other.status == "inbox"
+        assert other.actual_minutes is None
+        assert other.completed_at is None
+
+
+async def test_unparsed_actual_time_reasks_without_selecting_another_task(
+    repository: SqlAlchemyTaskRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    done_id = await persist(
+        repository,
+        complete_draft(project="BG", task_title=STRATEGIC, people=()),
+        user=1,
+        chat=1,
+    )
+    other_id = await persist(
+        repository,
+        complete_draft(project="BG", task_title=BONUSES, people=()),
+        user=1,
+        chat=1,
+    )
+    life = TaskLifecycleService(repository, InMemoryLifecycleStore(), _clock())
+    await life.handle_user_text(1, 1, f"виконано {STRATEGIC}")
+    await life.confirm(1, 1)
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.COMPLETE_TASK,
+                pending_action="switch_intent",
+                task_query=BONUSES,
+            )
+        ]
+    )
+    result = await _turn(
+        repository,
+        "не зрозумів питання",
+        router=router,
+        lifecycle=life,
+        projects=_ops(repository),
+    )
+    assert result.kind == LifecycleKind.ASK_ACTUAL
+    assert ASK_WHICH_TIME in result.text
+    assert BONUSES not in result.text
+    assert life.describe_pending(1, 1) is not None
+    async with session_factory() as session:
+        completed = await session.get(TaskRow, done_id)
+        other = await session.get(TaskRow, other_id)
+        assert completed is not None and other is not None
+        assert completed.actual_minutes is None
+        assert other.status == "inbox"
+
+
+async def test_natural_duration_replies_save_on_same_completed_task(
+    repository: SqlAlchemyTaskRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    cases = (
+        ("15", 15, "Talk with the finance team about ledger alpha"),
+        ("10 хв", 10, "Talk with the finance team about ledger beta"),
+        ("пів години", 30, "Talk with the finance team about ledger gamma"),
+        ("1 година", 60, "Talk with the finance team about ledger delta"),
+        ("1 год 20 хв", 80, "Talk with the finance team about ledger epsilon"),
+        ("десь 45 хвилин", 45, "Talk with the finance team about ledger zeta"),
+    )
+    life = TaskLifecycleService(repository, InMemoryLifecycleStore(), _clock())
+    for text, minutes, title in cases:
+        task_id = await persist(
+            repository,
+            complete_draft(project="BG", task_title=title, people=()),
+            user=1,
+            chat=1,
+        )
+        asked = await life.handle_user_text(1, 1, f"виконано {title}")
+        assert asked.kind == LifecycleKind.ASK_CONFIRM, asked.text
+        await life.confirm(1, 1)
+        result = await _turn(
+            repository,
+            text,
+            router=ScriptedRouter(
+                [
+                    UtteranceInterpretation(
+                        kind=RouterKind.COMPLETE_TASK,
+                        pending_action="switch_intent",
+                        task_query=BONUSES,
+                    )
+                ]
+            ),
+            lifecycle=life,
+            projects=_ops(repository),
+        )
+        assert result.kind == LifecycleKind.DONE
+        assert f"{minutes} хв" in result.text or (
+            minutes >= 60 and "год" in result.text
+        )
+        async with session_factory() as session:
+            row = await session.get(TaskRow, task_id)
+            assert row is not None
+            assert row.actual_minutes == minutes
+            assert row.status == "done"
+
+
+async def test_actual_time_pending_can_switch_to_list_projects(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    await persist(
+        repository,
+        complete_draft(project="BG", task_title=STRATEGIC, people=()),
+        user=1,
+        chat=1,
+    )
+    life = TaskLifecycleService(repository, InMemoryLifecycleStore(), _clock())
+    await life.handle_user_text(1, 1, f"виконано {STRATEGIC}")
+    await life.confirm(1, 1)
+    assert life.describe_pending(1, 1) is not None
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.LIST_PROJECTS,
+                pending_action="switch_intent",
+            )
+        ]
+    )
+    result = await _turn(
+        repository,
+        "Покажи тепер список проєктів.",
+        router=router,
+        lifecycle=life,
+        projects=_ops(repository),
+    )
+    assert result.kind.value == "list" or "📁 Проєкти" in result.text
+    assert life.describe_pending(1, 1) is None
