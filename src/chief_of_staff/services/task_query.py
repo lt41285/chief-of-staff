@@ -114,6 +114,7 @@ class TaskQueryService:
                 person_query=query,
                 is_person_ambiguity=True,
                 ambiguity_candidates=names,
+                status_filter=intent.status_filter,
             )
         search_name = query
         if resolved.status == "resolved" and resolved.person is not None:
@@ -185,7 +186,16 @@ class TaskQueryService:
                 ),
                 exact_person=bundle.exact_person,
                 label=bundle.label,
+                status_filter=intent.status_filter,
             )
+        bundle = SearchBundle(
+            query=bundle.query,
+            people=bundle.people,
+            tasks=bundle.tasks,
+            exact_person=bundle.exact_person,
+            label=bundle.label,
+            status_filter=intent.status_filter,
+        )
         text = format_search_facts(bundle)
         listed = list(bundle.tasks)
         return QueryResult(
@@ -216,6 +226,7 @@ class TaskQueryService:
                 person_query=query,
                 is_person_ambiguity=True,
                 ambiguity_candidates=names,
+                status_filter=intent.status_filter,
             )
         if resolved.status == "resolved" and resolved.person is not None:
             matched_selected = resolved.person
@@ -232,6 +243,7 @@ class TaskQueryService:
                 person_query=query,
                 is_person_ambiguity=True,
                 ambiguity_candidates=names,
+                status_filter=intent.status_filter,
             )
         tasks = await self._tasks_for_user(user_id, intent.status_filter)
         display_name = matched_selected.name if matched_selected is not None else query
@@ -287,9 +299,12 @@ class TaskQueryService:
                 display_name,
                 related,
                 empty_query=query,
+                status_filter=intent.status_filter,
             )
         else:
-            text = format_person_mention_list(display_name, related)
+            text = format_person_mention_list(
+                display_name, related, status_filter=intent.status_filter
+            )
         return _query_with_tasks(
             text,
             related,
@@ -316,7 +331,9 @@ class TaskQueryService:
         if resolved.status == "archived":
             tasks = await self._repository.list_open_tasks_for_project(user_id, resolved.id)
             header = f"📦 Проєкт «{resolved.name}» в архіві."
-            body = format_project_task_list(resolved.name, tasks)
+            body = format_project_task_list(
+                resolved.name, tasks, status_filter=status_filter
+            )
             return _query_with_tasks(
                 f"{header}\n\n{body}",
                 tasks,
@@ -326,7 +343,9 @@ class TaskQueryService:
         tasks = await self._tasks_for_user(user_id, status_filter)
         in_project = [task for task in tasks if task.project_id == resolved.id]
         return _query_with_tasks(
-            format_project_task_list(resolved.name, in_project),
+            format_project_task_list(
+                resolved.name, in_project, status_filter=status_filter
+            ),
             in_project,
             project_name=resolved.name,
             status_filter=status_filter,
@@ -339,7 +358,9 @@ class TaskQueryService:
             groups.setdefault(task.project, []).append(task)
         ordered = tuple(sorted(groups.items(), key=lambda item: item[0].casefold()))
         return _query_with_tasks(
-            format_all_tasks_grouped(ordered, total=len(tasks)),
+            format_all_tasks_grouped(
+                ordered, total=len(tasks), status_filter=status_filter
+            ),
             tasks,
             status_filter=status_filter,
         )
@@ -353,15 +374,62 @@ class TaskQueryService:
             return await listed(user_id)
         return await self.list_open_tasks(user_id)
 
+    async def describe_listed_status(
+        self,
+        user_id: int,
+        task_ids: tuple[UUID, ...] | list[UUID],
+        *,
+        person_name: str | None = None,
+    ) -> QueryResult:
+        tasks = await self.tasks_by_ids(user_id, task_ids, include_closed=True)
+        if not tasks:
+            return QueryResult(
+                kind=QueryKind.INFO,
+                text="Не бачу тих задач у базі. Назви їх ще раз.",
+                person_name=person_name,
+            )
+        done = [task for task in tasks if task.status == "done"]
+        cancelled = [task for task in tasks if task.status == "cancelled"]
+        opened = [task for task in tasks if task.status not in {"done", "cancelled"}]
+        lines = [
+            "Перевірив статус у базі — орієнтуюсь на записи, а не на формулювання:"
+        ]
+        if done:
+            label = "уже виконана" if len(done) == 1 else "уже виконані"
+            lines.append(f"{len(done)} {label}:")
+            lines.extend(f"— {task.title}" for task in done[:12])
+        if cancelled:
+            lines.append(f"{len(cancelled)} скасовані:")
+            lines.extend(f"— {task.title}" for task in cancelled[:8])
+        if opened:
+            label = "досі відкрита" if len(opened) == 1 else "досі відкриті"
+            lines.append(f"{len(opened)} {label}:")
+            lines.extend(f"— {task.title}" for task in opened[:12])
+        elif done:
+            lines.append("Відкритих серед них немає.")
+        return QueryResult(
+            kind=QueryKind.INFO,
+            text="\n".join(lines),
+            person_name=person_name,
+            task_ids=tuple(task.id for task in tasks),
+            titles=tuple(task.title for task in tasks),
+            listed_facts=facts_from_tasks(tasks),
+            status_filter="done" if done and not opened else None,
+        )
+
     async def tasks_by_ids(
-        self, user_id: int, task_ids: tuple[UUID, ...] | list[UUID]
+        self,
+        user_id: int,
+        task_ids: tuple[UUID, ...] | list[UUID],
+        *,
+        include_closed: bool = False,
     ) -> list[PlanCandidate]:
         found: list[PlanCandidate] = []
         for task_id in task_ids:
             task = await self._repository.get_user_task(user_id, task_id)
             if task is None:
                 continue
-            if task.status in {"done", "cancelled"}:
+            if not include_closed and task.status in {"done", "cancelled"}:
                 continue
             found.append(task)
         return found

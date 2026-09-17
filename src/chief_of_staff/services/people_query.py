@@ -14,7 +14,7 @@ _INTAKE = re.compile(
 _READ_ONLY = re.compile(
     r"(?i)(?:"
     r"\bпокажи(?:ть)?\b|\bвиведи(?:ть)?\b|\bсписок\b|\bякі\b|\bякий\b|"
-    r"що\s+(?:у\s+|в\s+)?мене\s+є|що\s+є\s+по|"
+    r"що\s+(?:у\s+|в\s+)?мене\s+є|що\s+є\s+по|чи\s+є|"
     r"що\s+треба\s+обговорити|що\s+(?:мені\s+)?треба\s+обговорити|"
     r"що\s+я\s+чекаю|покажи\s+waiting|"
     r"\bshow(?:\s+me)?\b|\blist\b|what\s+tasks|what\s+do\s+i\s+have|"
@@ -26,6 +26,15 @@ _READ_ONLY = re.compile(
 _WAITING_SCOPE = re.compile(
     r"(?i)що\s+я\s+чекаю|чекаю\s+від|очікую\s+від|\bwaiting\b|"
     r"what\s+am\s+i\s+waiting"
+)
+
+_DONE_SCOPE = re.compile(
+    r"(?i)виконан[іих]+\s+(?:задач|завдан|таск)|архівн[іих]+\s+(?:задач|завдан)|"
+    r"completed\s+tasks?|done\s+tasks?"
+)
+
+_OPEN_SCOPE = re.compile(
+    r"(?i)відкрит[іих]+\s+(?:задач|завдан|таск)|open\s+tasks?"
 )
 
 _DISCUSS_SCOPE = re.compile(
@@ -101,10 +110,12 @@ def parse_people_tasks_query(text: str) -> TaskIntent | None:
     if not name:
         return None
     connector = match.group("conn").casefold().strip()
-    # One token after «по»/«for» is a project (BG), not a person.
+    status = _status_scope(raw)
+    # One token after «по»/«for» is a project (BG), not a person — except
+    # explicit status lists («виконані/відкриті/waiting задачі по Боровцю»).
     if connector in {"по", "for"} and len(name.split()) < 2:
-        return None
-    status = "waiting" if _WAITING_SCOPE.search(raw) else None
+        if not _has_explicit_status_scope(raw) or _looks_like_project_token(name):
+            return None
     return TaskIntent(
         kind=TaskIntentKind.PEOPLE_TASKS_QUERY,
         person_query=name,
@@ -124,3 +135,22 @@ def _clean_name(value: str) -> str:
         if part.casefold().strip(".,?!«»\"'") not in _NOISE
     ]
     return " ".join(parts).strip(" .,?!«»\"'")
+
+
+def _status_scope(raw: str) -> str | None:
+    if _WAITING_SCOPE.search(raw):
+        return "waiting"
+    if _DONE_SCOPE.search(raw):
+        return "done"
+    return None
+
+
+def _has_explicit_status_scope(raw: str) -> bool:
+    return bool(
+        _WAITING_SCOPE.search(raw) or _DONE_SCOPE.search(raw) or _OPEN_SCOPE.search(raw)
+    )
+
+
+def _looks_like_project_token(name: str) -> bool:
+    compact = name.strip()
+    return compact.isascii() and compact.isupper() and 1 <= len(compact) <= 5

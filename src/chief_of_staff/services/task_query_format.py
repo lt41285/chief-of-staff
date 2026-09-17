@@ -21,6 +21,36 @@ def format_unknown_project(name: str) -> str:
 ASK_WHICH_PERSON = "Уточни, про кого йдеться."
 
 
+def format_task_count_phrase(count: int, status_filter: str | None = None) -> str:
+    if status_filter == "done":
+        if count == 1:
+            return "одну виконану задачу"
+        return f"{count} виконані задачі"
+    if status_filter == "waiting":
+        if count == 1:
+            return "одну задачу у waiting"
+        return f"{count} задачі у waiting"
+    if count == 1:
+        return "одну відкриту задачу"
+    return f"{count} відкриті задачі"
+
+
+def format_empty_status_tasks(scope: str, status_filter: str | None = None) -> str:
+    if status_filter == "done":
+        return f"{scope} немає виконаних задач."
+    if status_filter == "waiting":
+        return f"{scope} немає задач у waiting."
+    return f"{scope} немає відкритих задач."
+
+
+def _status_task_noun(count: int, status_filter: str | None) -> str:
+    if status_filter == "done":
+        return "виконану задачу" if count == 1 else "виконані задачі"
+    if status_filter == "waiting":
+        return "задачу у waiting" if count == 1 else "задачі у waiting"
+    return "відкриту задачу" if count == 1 else "відкриті задачі"
+
+
 def format_unknown_person(name: str) -> str:
     cleaned = (name or "").strip(" —–-\t")
     if not cleaned:
@@ -33,23 +63,26 @@ def format_person_mention_list(
     tasks: Sequence[PlanCandidate],
     *,
     today: date | None = None,
+    status_filter: str | None = None,
 ) -> str:
     if not tasks:
         return format_unknown_person(name)
     count = len(tasks)
-    noun = "відкриту задачу" if count == 1 else "відкриті задачі"
+    noun = _status_task_noun(count, status_filter)
     header = (
         f"Не бачу окремого запису {name} в people, але знайшов "
         f"{count} {noun}, де згадується це ім'я."
     )
-    body = format_person_task_list(name, tasks, empty_query=name, today=today)
+    body = format_person_task_list(
+        name, tasks, empty_query=name, today=today, status_filter=status_filter
+    )
     if body.startswith("👤"):
         return f"{header}\n\n{body}"
     return f"{header}\n\n{body}"
 
 
-def format_empty_person_tasks(query: str) -> str:
-    return f"По {query} немає відкритих задач."
+def format_empty_person_tasks(query: str, status_filter: str | None = None) -> str:
+    return format_empty_status_tasks(f"По {query}", status_filter)
 
 
 def format_person_picker(query: str, people: Sequence[PersonHit]) -> str:
@@ -68,11 +101,17 @@ def format_person_task_list(
     *,
     empty_query: str | None = None,
     today: date | None = None,
+    status_filter: str | None = None,
 ) -> str:
     if not tasks:
-        return format_empty_person_tasks(empty_query or canonical)
+        return format_empty_person_tasks(empty_query or canonical, status_filter)
     day = today or _today()
-    lines = [f"👤 {canonical}", ""]
+    heading = canonical
+    if status_filter == "done":
+        heading = f"{canonical} — виконані"
+    elif status_filter == "waiting":
+        heading = f"{canonical} — waiting"
+    lines = [f"👤 {heading}", ""]
     shown = 0
     remaining = MAX_LISTED_TASKS
     groups: dict[str, list[PlanCandidate]] = {}
@@ -96,8 +135,8 @@ def format_person_task_list(
     return "\n".join(lines).rstrip()
 
 
-def format_empty_project_tasks(canonical: str) -> str:
-    return f"У проєкті {canonical} немає відкритих задач."
+def format_empty_project_tasks(canonical: str, status_filter: str | None = None) -> str:
+    return format_empty_status_tasks(f"У проєкті {canonical}", status_filter)
 
 
 def format_project_task_list(
@@ -106,9 +145,10 @@ def format_project_task_list(
     *,
     total: int | None = None,
     today: date | None = None,
+    status_filter: str | None = None,
 ) -> str:
     if not tasks:
-        return format_empty_project_tasks(canonical)
+        return format_empty_project_tasks(canonical, status_filter)
     day = today or _today()
     lines = [f"📁 {canonical}", ""]
     shown = list(tasks[:MAX_LISTED_TASKS])
@@ -126,8 +166,13 @@ def format_all_tasks_grouped(
     *,
     total: int,
     today: date | None = None,
+    status_filter: str | None = None,
 ) -> str:
     if total <= 0:
+        if status_filter == "done":
+            return "Немає виконаних задач."
+        if status_filter == "waiting":
+            return "Немає задач у waiting."
         return EMPTY_ALL
     day = today or _today()
     lines: list[str] = []

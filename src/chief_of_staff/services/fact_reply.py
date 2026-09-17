@@ -5,38 +5,52 @@ from collections.abc import Sequence
 from chief_of_staff.models.plan import PlanCandidate
 from chief_of_staff.services.candidate_search import PersonCandidate, SearchBundle
 from chief_of_staff.services.reminder_messages import format_uk_date
-from chief_of_staff.services.task_query_format import format_person_task_list
+from chief_of_staff.services.task_query_format import (
+    format_empty_status_tasks,
+    format_person_task_list,
+    format_task_count_phrase,
+)
 
 
 def format_search_facts(bundle: SearchBundle) -> str:
     names = [person.name for person in bundle.people]
+    status = bundle.status_filter
     if len(bundle.people) > 1 and _ambiguous_people(bundle.people):
         options = " чи ".join(f"«{name}»" for name in names[:4])
         return f"Ти маєш на увазі {options}?"
     if not bundle.tasks:
         if bundle.people:
             shown = ", ".join(f"«{name}»" for name in names)
-            return (
-                f"Є {shown}, але зараз немає відкритих задач із цим ім'ям."
-            )
+            empty = format_empty_status_tasks("зараз", status)
+            return f"Є {shown}, але {empty}"
         return (
-            f"Не бачу відкритих задач по «{bundle.label}». "
+            f"Не бачу {_status_tasks_word(status)} по «{bundle.label}». "
             "Можу пошукати ширше в назвах і результатах."
         )
     header = _header(bundle)
-    body = format_person_task_list(bundle.label, bundle.tasks, empty_query=bundle.label)
+    body = format_person_task_list(
+        bundle.label,
+        bundle.tasks,
+        empty_query=bundle.label,
+        status_filter=status,
+    )
     compact = _compact_tasks(bundle.tasks)
     if header:
         return f"{header}\n\n{compact}"
     return compact or body
 
 
+def _status_tasks_word(status_filter: str | None) -> str:
+    if status_filter == "done":
+        return "виконаних задач"
+    if status_filter == "waiting":
+        return "задач у waiting"
+    return "відкритих задач"
+
+
 def _header(bundle: SearchBundle) -> str:
     count = len(bundle.tasks)
-    if count == 1:
-        noun = "одну відкриту задачу"
-    else:
-        noun = f"{count} відкриті задачі"
+    noun = format_task_count_phrase(count, bundle.status_filter)
     if bundle.exact_person:
         if count == 1:
             return f"Ок, бачу {noun}, пов'язану з {bundle.exact_person}:"

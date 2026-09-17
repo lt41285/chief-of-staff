@@ -19,7 +19,10 @@ from chief_of_staff.services.completion_statement import (
 from chief_of_staff.services.clock import KYIV
 from chief_of_staff.services.conversation_context import InMemoryConversationStore, PendingAmbiguity
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
-from chief_of_staff.services.followup_intent import parse_context_followup
+from chief_of_staff.services.followup_intent import (
+    looks_like_listed_status_dispute,
+    parse_context_followup,
+)
 from chief_of_staff.services.grounded_reply import validate_grounded_reply
 from chief_of_staff.services.intent_router import (
     ROUTER_UNCLEAR,
@@ -30,6 +33,7 @@ from chief_of_staff.services.intent_router import (
     safe_interpret,
     with_query_text,
 )
+from chief_of_staff.services.people_query import parse_people_tasks_query
 from chief_of_staff.services.pending_session import (
     PENDING_INTERPRET_FAILED,
     collect_pending_session,
@@ -42,14 +46,20 @@ from chief_of_staff.services.person_resolution import match_name_to_candidates
 from chief_of_staff.services.project_intent import parse_project_intent_deterministic
 from chief_of_staff.services.project_ops import ProjectManagementService, ProjectResult
 from chief_of_staff.services.query_scope import (
+    clean_person_query,
     looks_like_informal_address,
     should_reset_query_scope,
+    utterance_mentions_name,
 )
 from chief_of_staff.services.task_intake import IntakeResult, TaskIntakeService
 from chief_of_staff.services.task_lifecycle import (
     LifecycleKind,
     LifecycleResult,
     TaskLifecycleService,
+)
+from chief_of_staff.services.task_command_intent import (
+    looks_like_status_list_query,
+    parse_task_intent_deterministic,
 )
 from chief_of_staff.services.task_query import QueryKind, QueryResult, TaskQueryService
 from chief_of_staff.services.tool_runtime import execute_grounded_tools, needs_grounded_tools
@@ -165,6 +175,22 @@ async def _ai_first_turn(
         _remember_assistant(context, user_id, chat_id, result.text)
         return result
     if pending is None:
+        if (
+            snapshot is not None
+            and snapshot.pending_ambiguity is not None
+            and queries is not None
+        ):
+            handled = await _maybe_resolve_person_ambiguity(
+                queries,
+                user_id,
+                chat_id,
+                text,
+                snapshot,
+                context,
+                now=now,
+            )
+            if handled is not None:
+                return handled
         follow = parse_context_followup(text, snapshot, today=now.date())
         if follow is not None:
             result = await _dispatch_intent(
@@ -179,6 +205,19 @@ async def _ai_first_turn(
             )
             _remember_assistant(context, user_id, chat_id, result.text)
             return result
+        status_query = await _maybe_python_status_query(
+            intake,
+            user_id,
+            chat_id,
+            text,
+            snapshot,
+            lifecycle=lifecycle,
+            queries=queries,
+            context=context,
+        )
+        if status_query is not None:
+            _remember_assistant(context, user_id, chat_id, status_query.text)
+            return status_query
         phrasing = classify_completion_phrasing(text)
         if lifecycle is not None and phrasing in {
             CompletionPhrasing.COMPLETED,
@@ -801,8 +840,10 @@ def _remember_query(
             intent_kind=str(getattr(getattr(interp, "kind", None), "value", "") or "people_tasks_query"),
             person_query=result.person_query or "",
             available_minutes=available,
-            status_filter=result.status_filter,
-            project_query=result.project_name,
+            status_filter=result.status_filter
+            if result.status_filter is not None
+            else getattr(interp, "status_filter", None),
+            project_query=result.project_name or getattr(interp, "project_query", None),
             discuss=result.discuss,
         )
     context.remember_list(
@@ -813,7 +854,9 @@ def _remember_query(
         person_name=result.person_name,
         person_query=result.person_query or result.person_name,
         project_name=result.project_name,
-        status_filter=result.status_filter,
+        status_filter=result.status_filter
+        if result.status_filter is not None
+        else getattr(interp, "status_filter", None),
         discuss=result.discuss,
         last_query_kind=getattr(getattr(interp, "kind", None), "value", None),
         last_action=getattr(getattr(interp, "kind", None), "value", None),
@@ -873,6 +916,18 @@ async def _legacy_free_text(
             queries=queries,
             context=context,
         )
+    status_query = await _maybe_python_status_query(
+        intake,
+        user_id,
+        chat_id,
+        text,
+        snapshot,
+        lifecycle=lifecycle,
+        queries=queries,
+        context=context,
+    )
+    if status_query is not None:
+        return status_query
     if queries is not None:
         query_intent = await queries.classify(text)
         if query_intent is not None:
@@ -920,6 +975,77 @@ async def _legacy_free_text(
     return await intake.handle_user_text(user_id, text, chat_id=chat_id)
 
 
+def _bind_person_from_snapshot(
+    intent: TaskIntent, snapshot: object | None, _text: str
+) -> TaskIntent:
+    if snapshot is None or not intent.person_query:
+        return intent
+    snap = clean_person_query(getattr(snapshot, "person_query", None)) or clean_person_query(
+        getattr(snapshot, "person_name", None)
+    )
+    if not snap:
+        return intent
+    query = intent.person_query
+    if utterance_mentions_name(snap, query) and snap.casefold() != query.casefold():
+        return intent.model_copy(update={"person_query": snap})
+    return intent
+
+
+async def _maybe_python_status_query(
+    intake: TaskIntakeService,
+    user_id: int,
+    chat_id: int,
+    text: str,
+    snapshot: object | None,
+    *,
+    lifecycle: TaskLifecycleService | None,
+    queries: TaskQueryService | None,
+    context: InMemoryConversationStore | None,
+) -> UserReply | None:
+    if queries is None:
+        return None
+    if looks_like_listed_status_dispute(text):
+        task_ids = getattr(snapshot, "task_ids", ()) if snapshot is not None else ()
+        if task_ids:
+            return await queries.describe_listed_status(
+                user_id,
+                task_ids,
+                person_name=getattr(snapshot, "person_name", None) if snapshot else None,
+            )
+    people_query = parse_people_tasks_query(text)
+    if people_query is not None and (
+        looks_like_status_list_query(text)
+        or people_query.status_filter in {"done", "waiting"}
+    ):
+        bound = _bind_person_from_snapshot(people_query, snapshot, text)
+        return await _dispatch_intent(
+            intake,
+            user_id,
+            chat_id,
+            text,
+            bound,
+            lifecycle=lifecycle,
+            queries=queries,
+            context=context,
+        )
+    if not looks_like_status_list_query(text):
+        return None
+    parsed = parse_task_intent_deterministic(text)
+    if parsed is not None and parsed.kind in QUERY_INTENT_KINDS:
+        bound = _bind_person_from_snapshot(parsed, snapshot, text)
+        return await _dispatch_intent(
+            intake,
+            user_id,
+            chat_id,
+            text,
+            bound,
+            lifecycle=lifecycle,
+            queries=queries,
+            context=context,
+        )
+    return None
+
+
 async def _dispatch_intent(
     intake: TaskIntakeService,
     user_id: int,
@@ -938,6 +1064,18 @@ async def _dispatch_intent(
         result = await queries.handle_intent(user_id, intent)
         if context is not None:
             clear_person = intent.kind == TaskIntentKind.LIST_ALL_TASKS
+            pending = None
+            if result.is_person_ambiguity and result.ambiguity_candidates:
+                pending = PendingAmbiguity(
+                    original_message=text,
+                    original_reference=result.person_query or intent.person_query or "",
+                    candidates=result.ambiguity_candidates,
+                    intent_kind=intent.kind.value,
+                    person_query=result.person_query or intent.person_query or "",
+                    status_filter=result.status_filter or intent.status_filter,
+                    project_query=intent.project_query,
+                    discuss=result.discuss,
+                )
             context.remember_list(
                 user_id,
                 chat_id,
@@ -946,13 +1084,15 @@ async def _dispatch_intent(
                 person_name=None if clear_person else result.person_name,
                 person_query=None if clear_person else (result.person_query or intent.person_query),
                 project_name=result.project_name,
-                status_filter=result.status_filter,
+                status_filter=result.status_filter or intent.status_filter,
                 discuss=result.discuss,
                 last_query_kind=intent.kind.value,
                 last_action=intent.kind.value,
                 excluded_people=(intent.exclude_person,) if intent.exclude_person else None,
                 replace_person=clear_person or result.replace_person or bool(intent.exclude_person),
                 listed_facts=result.listed_facts,
+                pending_ambiguity=pending,
+                clear_pending_ambiguity=pending is None and not result.is_person_ambiguity,
             )
         return result
     if intent.kind != TaskIntentKind.NORMAL_TASK_INPUT and lifecycle is not None:

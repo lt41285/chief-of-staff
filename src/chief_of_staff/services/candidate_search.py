@@ -27,6 +27,7 @@ class SearchBundle:
     tasks: tuple[PlanCandidate, ...]
     exact_person: str | None
     label: str
+    status_filter: str | None = None
 
 
 def search_person_tasks(

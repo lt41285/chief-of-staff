@@ -80,6 +80,12 @@ def parse_person_ambiguity_reply(
     ordinal = _ordinal_index(raw)
     if ordinal is not None and 1 <= ordinal <= len(candidates):
         return {"action": "pick", "name": candidates[ordinal - 1]}
+
+    first = raw.split(".")[0].strip()
+    for candidate_text in (first, raw):
+        picked = match_name_to_candidates(_clean(candidate_text), candidates)
+        if picked is not None:
+            return {"action": "pick", "name": picked}
     return None
 
 

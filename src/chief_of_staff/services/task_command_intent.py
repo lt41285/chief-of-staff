@@ -150,7 +150,7 @@ def parse_task_intent_deterministic(text: str) -> TaskIntent | None:
         return TaskIntent(kind=TaskIntentKind.CANCEL_TASK, task_query=_query_from(raw))
     if _UPDATE.search(raw) and not _COMPLETE.search(raw):
         return TaskIntent(kind=TaskIntentKind.UPDATE_TASK, task_query=_query_from(raw))
-    if _COMPLETE.search(raw):
+    if _COMPLETE.search(raw) and not _looks_like_done_list(raw):
         return TaskIntent(kind=TaskIntentKind.COMPLETE_TASK, task_query=_complete_query(raw))
     return None
 
@@ -195,10 +195,12 @@ def looks_like_task_query(text: str) -> bool:
         return True
     if looks_like_people_tasks_query(text):
         return True
+    if looks_like_status_list_query(text):
+        return True
     folded = text.translate(_APOS).casefold()
     has_head = bool(
         re.search(
-            r"\b(?:покажи|покажіть|виведи|список|які|який|show|list)\b",
+            r"\b(?:покажи|покажіть|виведи|список|які|який|show|list|чи\s+є)\b",
             folded,
         )
     )
@@ -207,6 +209,31 @@ def looks_like_task_query(text: str) -> bool:
     )
     has_noun = bool(re.search(r"задач|завдан|таск|\btasks?\b", folded))
     return (has_head or has_all_tasks) and has_noun
+
+
+def looks_like_status_list_query(text: str) -> bool:
+    """Read-only list by status. Past-tense completion is not this."""
+    raw = " ".join(text.translate(_APOS).split())
+    if not raw:
+        return False
+    if _looks_like_done_list(raw):
+        return True
+    folded = raw.casefold()
+    has_status = bool(
+        re.search(
+            r"виконан[іих]+|архівн[іих]+|відкрит[іих]+|\bwaiting\b|"
+            r"completed|\bopen\s+tasks?\b|\bdone\s+tasks?\b",
+            folded,
+        )
+    )
+    if not has_status:
+        return False
+    has_list_shape = bool(
+        looks_like_list_head(raw)
+        or re.search(r"чи\s+є|є\s+(?:виконан|архівн|відкрит)|покажи|які|список", folded)
+    )
+    has_noun = bool(re.search(r"задач|завдан|таск|\btasks?\b|\bwaiting\b", folded))
+    return has_list_shape and has_noun
 
 
 def _parse_list_query(raw: str) -> TaskIntent | None:
@@ -257,7 +284,13 @@ def _status_filter(raw: str) -> str | None:
     folded = raw.casefold()
     if re.search(r"waiting|очікуван", folded):
         return "waiting"
-    if re.search(r"виконан|completed|\bdone\s+tasks?\b", folded) and looks_like_list_head(raw):
+    if re.search(
+        r"виконан[іих]+|архівн[іих]+|completed|\bdone\s+tasks?\b",
+        folded,
+    ) and (
+        looks_like_list_head(raw)
+        or re.search(r"чи\s+є|є\s+(?:виконан|архівн)|задач", folded)
+    ):
         return "done"
     return None
 
@@ -283,7 +316,19 @@ def looks_like_complete_command(text: str) -> bool:
     parsed = parse_task_intent_deterministic(text)
     if parsed is not None:
         return parsed.kind == TaskIntentKind.COMPLETE_TASK
+    if _looks_like_done_list(text.translate(_APOS)):
+        return False
     return bool(_COMPLETE.search(text.translate(_APOS)))
+
+
+def _looks_like_done_list(raw: str) -> bool:
+    return bool(
+        re.search(
+            r"(?i)(?:виконан[іих]+|архівн[іих]+|completed|done)\s+"
+            r"(?:задач|завдан|таск|tasks?)",
+            raw,
+        )
+    )
 
 
 def _postpone_intent(raw: str) -> TaskIntent:

@@ -31,11 +31,17 @@ _PRONOUN = re.compile(
     r"(?i)\b(?:він|нього|йому|ним|вона|неї|їй|нею|його)\b"
 )
 _STATUS_FOLLOWUP = re.compile(
-    r"(?i)^\s*а?\s*(?:покажи(?:ть)?\s+)?"
+    r"(?i)^\s*(?:а\s+|чи\s+є\s+)?"
+    r"(?:покажи(?:ть)?\s+)?"
     r"(?P<kind>виконан[іих]+|архівн[іих]+|completed|done|waiting|"
     r"відкрит[іих]+|open)"
     r"(?:\s+(?:задач\w*|завдан\w*|таск\w*|tasks?))?"
     r"\s*[.?!]?\s*$"
+)
+_STATUS_DISPUTE = re.compile(
+    r"(?i)(?:я\s+закрив|вони\s+(?:вже\s+)?(?:закрит|виконан)).{0,80}"
+    r"(?:ти\s+кажеш|ти\s+пишеш|ти\s+показав)|"
+    r"ти\s+кажеш.{0,80}(?:відкрит|закрит|виконан)"
 )
 
 
@@ -148,6 +154,11 @@ def _title_at(snapshot: ConversationSnapshot, index: int | None) -> str | None:
 def looks_like_status_followup(text: str) -> bool:
     raw = " ".join(text.translate(_APOS).split()).strip()
     return _status_followup(raw)[0]
+
+
+def looks_like_listed_status_dispute(text: str) -> bool:
+    raw = " ".join(text.translate(_APOS).split()).strip()
+    return bool(raw and _STATUS_DISPUTE.search(raw))
 
 
 def followup_status_filter(text: str) -> str | None:

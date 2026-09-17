@@ -95,7 +95,10 @@ async def execute_grounded_tools(
             tasks = _apply_task_filters(tasks, interp, today)
             return _global_list_result(tasks, interp)
         result = await queries.handle_intent(user_id, mapped)
-        tasks = await queries.tasks_by_ids(user_id, result.task_ids)
+        include_closed = mapped.status_filter == "done" or result.status_filter == "done"
+        tasks = await queries.tasks_by_ids(
+            user_id, result.task_ids, include_closed=include_closed
+        )
         tasks = _apply_task_filters(tasks, interp, today)
         if interp.include_overdue or interp.clear_person_filter:
             return _global_list_result(tasks, interp)
@@ -125,7 +128,10 @@ async def execute_grounded_tools(
         result = await queries.handle_intent(user_id, mapped)
     if result.is_person_ambiguity:
         return result
-    tasks = await queries.tasks_by_ids(user_id, result.task_ids)
+    include_closed = (mapped.status_filter == "done") or (result.status_filter == "done")
+    tasks = await queries.tasks_by_ids(
+        user_id, result.task_ids, include_closed=include_closed
+    )
     tasks = _drop_indexes(tasks, interp.exclude_indexes)
     tasks = _apply_task_filters(tasks, interp, today)
     if interp.include_overdue or interp.period:
@@ -134,7 +140,12 @@ async def execute_grounded_tools(
             label = result.person_name or interp.person_query or "задачі"
             result = QueryResult(
                 kind=QueryKind.TASKS if tasks else QueryKind.INFO,
-                text=format_person_task_list(label, tasks, empty_query=interp.person_query or label),
+                text=format_person_task_list(
+                    label,
+                    tasks,
+                    empty_query=interp.person_query or label,
+                    status_filter=result.status_filter,
+                ),
                 person_name=result.person_name,
                 person_query=result.person_query or interp.person_query,
                 project_name=result.project_name,
@@ -172,7 +183,10 @@ async def _search_tasks(
         result = await queries.search_people(user_id, mapped)
     else:
         result = await queries.handle_intent(user_id, mapped)
-    return await queries.tasks_by_ids(user_id, result.task_ids)
+    include_closed = mapped.status_filter == "done"
+    return await queries.tasks_by_ids(
+        user_id, result.task_ids, include_closed=include_closed
+    )
 
 
 async def _period_query(
@@ -218,7 +232,12 @@ async def _listed_tasks(
     snapshot: ConversationSnapshot | None,
 ) -> list[PlanCandidate]:
     ids = _resolve_listed_ids(interp, snapshot)
-    return await queries.tasks_by_ids(user_id, ids)
+    include_closed = False
+    if interp.status_filter == "done" or (
+        snapshot is not None and snapshot.status_filter == "done"
+    ):
+        include_closed = True
+    return await queries.tasks_by_ids(user_id, ids, include_closed=include_closed)
 
 
 def _resolve_listed_ids(
