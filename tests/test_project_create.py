@@ -85,6 +85,23 @@ def test_create_project_intents() -> None:
     assert past.new_name == "Фундації УКУ за кордоном"
 
 
+def test_create_project_tolerates_stt_verb_slip() -> None:
+    parsed = parse_project_intent_deterministic("Створий новий проєкт Тест сценарію")
+    assert parsed is not None
+    assert parsed.kind == ProjectIntentKind.CREATE_PROJECT
+    assert parsed.new_name == "Тест сценарію"
+    formal = parse_project_intent_deterministic("Створіть проєкт BG")
+    assert formal is not None
+    assert formal.kind == ProjectIntentKind.CREATE_PROJECT
+    assert formal.new_name == "BG"
+
+
+def test_create_project_stt_does_not_match_plain_mentions() -> None:
+    assert parse_project_intent_deterministic("Треба створити проєкт наступного року") is None
+    assert parse_project_intent_deterministic("Онови проєкт BG") is None
+    assert parse_project_intent_deterministic("Створи задачу по BG") is None
+
+
 async def test_create_requires_confirm_and_cancel_creates_nothing(
     repository: SqlAlchemyTaskRepository,
     session_factory: async_sessionmaker[AsyncSession],

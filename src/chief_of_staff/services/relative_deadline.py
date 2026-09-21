@@ -6,6 +6,7 @@ from datetime import date, timedelta
 import re
 
 from chief_of_staff.services.date_windows import resolve_period
+from chief_of_staff.services.deadline_parse import parse_natural_deadline
 
 _ISO = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _END_OF_WEEK = re.compile(
@@ -56,6 +57,9 @@ def resolve_deadline_expression(text: str | None, today: date) -> date | None:
         return today
     if _TOMORROW.search(folded):
         return today + timedelta(days=1)
+    natural = parse_natural_deadline(cleaned, today)
+    if natural is not None:
+        return natural
     if _NEXT_WEEK.search(folded):
         window = resolve_period("next_week", today)
         return window[1] if window else None

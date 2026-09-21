@@ -199,21 +199,82 @@ def parse_project_intent_deterministic(text: str) -> ProjectIntent | None:
     return None
 
 
+_CREATE_VERBS = (
+    "створи",
+    "створити",
+    "створено",
+    "створив",
+    "створила",
+    "створили",
+    "додай",
+    "додати",
+)
+_FUZZY_CREATE = re.compile(
+    r"(?i)^\s*(?:я\s+|i\s+)?(?P<verb>\S+)\s+"
+    r"(?:новий\s+|new\s+)?"
+    r"(?:проєкт|проект|project)\s*[—–-]?\s*(?P<name>.*)\s*$"
+)
+
+
 def _parse_create(raw: str) -> ProjectIntent | None:
     if _TASK_CREATE.search(raw):
         return None
     match = _CREATE.match(raw)
+    if match is not None:
+        name = _clean_name(
+            match.group("slash")
+            or match.group("named")
+            or match.group("past")
+            or match.group("enpast")
+            or match.group("bare")
+            or ""
+        )
+        return ProjectIntent(kind=ProjectIntentKind.CREATE_PROJECT, new_name=name or None)
+    return _parse_create_stt(raw)
+
+
+def _parse_create_stt(raw: str) -> ProjectIntent | None:
+    """Accept a 1–2 character STT slip on a leading create verb + project noun."""
+    match = _FUZZY_CREATE.match(raw)
     if match is None:
         return None
-    name = _clean_name(
-        match.group("slash")
-        or match.group("named")
-        or match.group("past")
-        or match.group("enpast")
-        or match.group("bare")
-        or ""
-    )
+    if not _looks_like_create_verb(match.group("verb")):
+        return None
+    name = _clean_name(match.group("name") or "")
     return ProjectIntent(kind=ProjectIntentKind.CREATE_PROJECT, new_name=name or None)
+
+
+def _looks_like_create_verb(verb: str) -> bool:
+    folded = verb.translate(_APOS).casefold().strip(".,!?")
+    if folded in _CREATE_VERBS:
+        return True
+    if not (folded.startswith("ств") or folded.startswith("дод")):
+        return False
+    for candidate in _CREATE_VERBS:
+        limit = 2 if len(candidate) >= 6 else 1
+        if _edit_distance(folded, candidate) <= limit:
+            return True
+    return False
+
+
+def _edit_distance(left: str, right: str) -> int:
+    if left == right:
+        return 0
+    if abs(len(left) - len(right)) > 2:
+        return 3
+    previous = list(range(len(right) + 1))
+    for i, char in enumerate(left, start=1):
+        current = [i]
+        for j, other in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[j - 1] + 1,
+                    previous[j] + 1,
+                    previous[j - 1] + (char != other),
+                )
+            )
+        previous = current
+    return previous[-1]
 
 
 def _parse_list_archived(raw: str) -> ProjectIntent | None:

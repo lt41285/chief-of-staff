@@ -355,7 +355,7 @@ async def test_clarification_fills_multiple_fields_across_turns() -> None:
     assert "deadline" in second.text.lower() or "дедлайн" in second.text.lower()
     assert "project" not in second.text.lower() and "проєкт" not in second.text.lower()
 
-    third = await service.handle_user_text(4, "2 Sep, 20 min", chat_id=40)
+    third = await service.handle_user_text(4, "2 Sep 2026, 20 min", chat_id=40)
     assert third.kind == IntakeKind.CONFIRMATION
     assert "Unity Center" in third.text
     assert "Agree the revised budget with Taras" in third.text
