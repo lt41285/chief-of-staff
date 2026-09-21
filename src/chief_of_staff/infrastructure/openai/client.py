@@ -37,13 +37,16 @@ class OpenAIResponsesClient:
         instructions: str,
         text_format: type[T],
     ) -> T:
-        response = await self._client.responses.parse(
-            model=self._model,
-            input=user_input,
-            instructions=instructions,
-            text_format=text_format,
-            temperature=0,
-        )
+        from chief_of_staff.services.timing import log_stage
+
+        with log_stage("openai.parse_structured", model=self._model):
+            response = await self._client.responses.parse(
+                model=self._model,
+                input=user_input,
+                instructions=instructions,
+                text_format=text_format,
+                temperature=0,
+            )
         parsed = response.output_parsed
         if parsed is None:
             raise ValueError("OpenAI returned no structured output")

@@ -13,6 +13,9 @@ _CREATE = re.compile(
     r"/newproject(?:\s+(?P<slash>.+))?"
     r"|(?:створи(?:ти)?|додай(?:ти)?|create|add)\s+"
     r"(?:новий\s+|new\s+)?(?:проєкт|проект|project)\s*[—–-]?\s*(?P<named>.*)"
+    r"|(?:створено|я\s+створи(?:в|ла|ли)|створи(?:в|ла|ли))\s+"
+    r"(?:новий\s+|new\s+)?(?:проєкт|проект|project)\s*[—–-]?\s*(?P<past>.*)"
+    r"|(?:i\s+)?created\s+(?:a\s+)?(?:new\s+)?project\s*[—–-]?\s*(?P<enpast>.*)"
     r"|(?:новий|new)\s+(?:проєкт|проект|project)\s*[—–-]?\s*(?P<bare>.+)"
     r")\s*$",
     re.IGNORECASE,
@@ -53,6 +56,9 @@ _LIST_HINT = re.compile(
 _EXPLICIT_CREATE = re.compile(
     r"(?i)^\s*(?:створи(?:ти)?|додай(?:ти)?|хочу\s+створити|create|add)\s+"
     r"(?:новий\s+|new\s+)?(?:проєкт|проект|project)"
+    r"|^\s*(?:створено|я\s+створи(?:в|ла|ли)|створи(?:в|ла|ли))\s+"
+    r"(?:новий\s+|new\s+)?(?:проєкт|проект|project)"
+    r"|^\s*(?:i\s+)?created\s+(?:a\s+)?(?:new\s+)?project\b"
     r"|^\s*(?:новий|new)\s+(?:проєкт|проект|project)\b"
 )
 _RENAME = re.compile(
@@ -200,7 +206,12 @@ def _parse_create(raw: str) -> ProjectIntent | None:
     if match is None:
         return None
     name = _clean_name(
-        match.group("slash") or match.group("named") or match.group("bare") or ""
+        match.group("slash")
+        or match.group("named")
+        or match.group("past")
+        or match.group("enpast")
+        or match.group("bare")
+        or ""
     )
     return ProjectIntent(kind=ProjectIntentKind.CREATE_PROJECT, new_name=name or None)
 

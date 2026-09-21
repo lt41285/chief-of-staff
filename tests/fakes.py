@@ -104,6 +104,10 @@ class FakeTaskRepository:
                 unique.setdefault(key, PersonHit(name=task.waiting_for))
         return list(unique.values())
 
+    async def list_person_aliases_for_user(self, telegram_user_id: int) -> list:
+        del telegram_user_id
+        return []
+
     async def mark_tasks_today(
         self, telegram_user_id: int, task_ids: tuple[UUID, ...]
     ) -> None:

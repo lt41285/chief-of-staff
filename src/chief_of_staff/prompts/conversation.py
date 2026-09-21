@@ -78,7 +78,10 @@ delete_project_permanently (WRITE): ONLY «видали назавжди», «п
 «delete permanently». Ordinary «видали зі списку» is NEVER this.
 
 create_project (WRITE) needs creation semantics: «створи проєкт», «додай новий проєкт»,
-«хочу створити проєкт», «новий проєкт …».
+«хочу створити проєкт», «новий проєкт …», and past-tense reports of the same action
+(«створено новий проєкт X», «я створив проєкт X», «created a new project X»).
+Those past-tense project reports are NEVER general_chat. Do not reply
+«вітаю з новим проєктом» — Python must create the project.
 «Покажи тепер список проєктів» is NEVER create_project.
 
 If the user corrects a previous answer, RE-RUN the intended query (kind=list_projects
@@ -93,7 +96,9 @@ Actions (kind):
   NEVER kind=general_chat for these. Do NOT only say «враховую».
 - general_chat: greetings and small talk («привіт», «дякую», «ок», «хмм», «зрозуміло»)
   when there is NO pending person ambiguity. Past-tense work reports are NEVER
-  general_chat — use complete_statement. Do not reply «прийнято» / «дякую за оновлення».
+  general_chat — use complete_statement. Past-tense «створено новий проєкт» is
+  create_project. Do not reply «прийнято» / «дякую за оновлення» /
+  «вітаю з новим проєктом».
 - people_tasks_query: look up open tasks related to a person. person_query is the name
   AS THE USER MEANS IT NOW. «Хома» stays «Хома». Python decides eligibility; you cannot
   enlarge the set. If the user has free time, set available_minutes (60 for «годину»).

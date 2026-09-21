@@ -13,13 +13,16 @@ from chief_of_staff.infrastructure.database.orm.task import TaskRow
 from chief_of_staff.infrastructure.database.orm.user import UserRow
 from chief_of_staff.infrastructure.database.repository import SqlAlchemyTaskRepository
 from chief_of_staff.models.project_command import ProjectIntentKind
+from chief_of_staff.models.utterance_intent import RouterKind, UtteranceInterpretation
 from chief_of_staff.services.names import normalize_project_name
+from chief_of_staff.services.pending_session import prefer_read_over_write
 from chief_of_staff.services.project_intent import parse_project_intent_deterministic
 from chief_of_staff.services.project_ops import ProjectKind, ProjectManagementService
 from chief_of_staff.services.project_session import InMemoryProjectOpStore
 from chief_of_staff.services.task_intake import IntakeKind, TaskIntakeService
 from chief_of_staff.services.task_session import DraftPhase, InMemoryTaskSessionStore
 from chief_of_staff.services.voice import VoiceMessageService
+from tests.test_ai_router import ScriptedRouter
 from tests.test_task_persistence import persist
 from tests.test_task_validation import ScriptedInterpreter, complete_draft
 from tests.test_voice_intake import FakeTranscriber
@@ -57,6 +60,9 @@ def test_create_project_intents() -> None:
         "Новий проєкт — Fundraising.",
         "Create project Angel Portfolio.",
         "/newproject",
+        "Створено новий проєкт Фундації УКУ за кордоном.",
+        "Я створив проєкт Fundraising",
+        "Created a new project Angel Portfolio.",
     ):
         parsed = parse_project_intent_deterministic(text)
         assert parsed is not None, text
@@ -71,6 +77,12 @@ def test_create_project_intents() -> None:
     add_proj = parse_project_intent_deterministic("Додай проєкт Fundraising")
     assert add_proj is not None
     assert add_proj.kind == ProjectIntentKind.CREATE_PROJECT
+    past = parse_project_intent_deterministic(
+        "Створено новий проєкт Фундації УКУ за кордоном."
+    )
+    assert past is not None
+    assert past.kind == ProjectIntentKind.CREATE_PROJECT
+    assert past.new_name == "Фундації УКУ за кордоном"
 
 
 async def test_create_requires_confirm_and_cancel_creates_nothing(
@@ -294,3 +306,68 @@ async def test_fuzzy_suggestion_does_not_create(
     async with session_factory() as session:
         assert await session.scalar(select(func.count()).select_from(TaskRow)) == 1
         assert await session.scalar(select(func.count()).select_from(ProjectRow)) == 1
+
+
+def test_prefer_read_keeps_past_tense_project_create() -> None:
+    text = "Створено новий проєкт Фундації УКУ за кордоном."
+    interp = UtteranceInterpretation(
+        kind=RouterKind.CREATE_PROJECT,
+        project="Фундації УКУ за кордоном",
+    )
+    kept = prefer_read_over_write(interp, text, None)
+    assert kept.kind == RouterKind.CREATE_PROJECT
+
+
+async def test_past_tense_project_create_does_not_congratulate_without_creating(
+    repository: SqlAlchemyTaskRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.GENERAL_CHAT,
+                chat_reply="Вітаю з новим проєктом! Якщо потрібно додати задачі — дайте знати.",
+            )
+        ]
+    )
+    interpreter = ScriptedInterpreter([])
+    result = await process_user_utterance(
+        TaskIntakeService(interpreter, InMemoryTaskSessionStore(), repository),
+        1,
+        1,
+        "Створено новий проєкт Фундації УКУ за кордоном.",
+        projects=_ops(repository),
+        router=router,
+    )
+    assert result.kind == ProjectKind.ASK_CONFIRM
+    assert "Вітаю" not in result.text
+    assert "Фундації УКУ за кордоном" in result.text
+    assert router.calls == []
+    assert interpreter.calls == []
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(ProjectRow)) == 0
+
+
+async def test_voice_past_tense_project_create_asks_to_confirm(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.GENERAL_CHAT,
+                chat_reply="Вітаю з новим проєктом!",
+            )
+        ]
+    )
+    interpreter = ScriptedInterpreter([])
+    voice = VoiceMessageService(
+        FakeTranscriber(["Створено новий проєкт Фундації УКУ за кордоном."]),
+        TaskIntakeService(interpreter, InMemoryTaskSessionStore(), repository),
+        projects=_ops(repository),
+        router=router,
+    )
+    result = await voice.handle_voice(1, 1, b"ogg")
+    assert result.intake is not None
+    assert result.intake.kind == ProjectKind.ASK_CONFIRM
+    assert "Вітаю" not in result.intake.text
+    assert router.calls == []

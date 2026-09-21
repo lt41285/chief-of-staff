@@ -2,26 +2,29 @@
 
 from chief_of_staff.models.task import TaskDraft
 
-READY_PROMPT = "Ready to create this task? Yes / Edit / Cancel"
-CREATED_HEADER = "✅ Task created"
-SAVE_FAILED = "Could not save the task. Tap Yes to retry."
-EDIT_PROMPT = "What should I change?"
-CANCELLED = "Cancelled."
-NO_PENDING_TASK = "No task is waiting for confirmation."
+READY_PROMPT = "Готово створити цю задачу? Так / Редагувати / Скасувати"
+CREATED_HEADER = "✅ Задачу створено"
+SAVE_FAILED = "Не вдалося зберегти задачу. Натисни Так, щоб повторити."
+EDIT_PROMPT = "Що змінити?"
+CANCELLED = "Скасовано."
+NO_PENDING_TASK = "Немає задачі, яка чекає підтвердження."
 
 
 def format_task_summary(draft: TaskDraft) -> str:
     people = ", ".join(draft.people) if draft.people else "—"
     deadline = draft.deadline.isoformat() if draft.deadline else "—"
-    minutes = f"{draft.estimated_minutes} min" if draft.estimated_minutes is not None else "—"
+    if draft.estimated_minutes is not None:
+        minutes = f"{draft.estimated_minutes} хв"
+    else:
+        minutes = "—"
     return (
-        "📋 Task\n"
-        f"Project: {draft.project or '—'}\n"
-        f"Task: {draft.task_title or '—'}\n"
-        f"People: {people}\n"
-        f"Deadline: {deadline}\n"
-        f"Estimated time: {minutes}\n"
-        f"Outcome: {draft.desired_outcome or '—'}"
+        "📋 Задача\n"
+        f"Проєкт: {draft.project or '—'}\n"
+        f"Задача: {draft.task_title or '—'}\n"
+        f"Люди: {people}\n"
+        f"Дедлайн: {deadline}\n"
+        f"Оцінка часу: {minutes}\n"
+        f"Результат: {draft.desired_outcome or '—'}"
     )
 
 

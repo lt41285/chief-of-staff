@@ -22,9 +22,9 @@ def confirmation_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Yes", callback_data=YES),
-                InlineKeyboardButton("Edit", callback_data=EDIT),
-                InlineKeyboardButton("Cancel", callback_data=CANCEL),
+                InlineKeyboardButton("Так", callback_data=YES),
+                InlineKeyboardButton("Редагувати", callback_data=EDIT),
+                InlineKeyboardButton("Скасувати", callback_data=CANCEL),
             ]
         ]
     )
@@ -34,9 +34,9 @@ def plan_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("✅ Accept plan", callback_data=PLAN_ACCEPT),
-                InlineKeyboardButton("🔄 Replan", callback_data=PLAN_REPLAN),
-                InlineKeyboardButton("❌ Cancel", callback_data=PLAN_CANCEL),
+                InlineKeyboardButton("✅ Прийняти план", callback_data=PLAN_ACCEPT),
+                InlineKeyboardButton("🔄 Перепланувати", callback_data=PLAN_REPLAN),
+                InlineKeyboardButton("❌ Скасувати", callback_data=PLAN_CANCEL),
             ]
         ]
     )

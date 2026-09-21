@@ -22,6 +22,7 @@ class TaskSession:
     similar_project_name: str | None = None
     requested_project: str | None = None
     presented_project_names: tuple[str, ...] = ()
+    language: str = "uk"
 
 
 class InMemoryTaskSessionStore:

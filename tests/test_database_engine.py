@@ -32,6 +32,7 @@ def test_async_engine_uses_null_pool_and_pooler_connect_args() -> None:
         assert isinstance(engine.sync_engine.pool, NullPool)
         kwargs = asyncpg_pooler_engine_kwargs()
         assert kwargs["poolclass"] is NullPool
+        assert kwargs["pool_pre_ping"] is False
         assert kwargs["connect_args"]["prepared_statement_cache_size"] == 0
     finally:
         engine.sync_engine.dispose()

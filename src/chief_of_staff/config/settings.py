@@ -1,5 +1,7 @@
 """Typed environment configuration (pydantic-settings + python-dotenv)."""
 
+import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -84,6 +86,24 @@ def _to_asyncpg_url(url: str) -> str:
 
 def _to_psycopg_url(url: str) -> str:
     return f"postgresql+psycopg://{_strip_driver(url)}"
+
+
+_SUPABASE_POOLER_REGION = re.compile(
+    r"aws-0-([a-z0-9-]+)\.pooler\.supabase\.com",
+    re.IGNORECASE,
+)
+
+
+def supabase_pooler_region(url: str | None) -> str:
+    """AWS region token from a Supabase pooler URL. Never returns the URL itself."""
+    if not url:
+        return "unset"
+    match = _SUPABASE_POOLER_REGION.search(url)
+    return match.group(1) if match else "unknown"
+
+
+def railway_replica_region() -> str:
+    return os.getenv("RAILWAY_REPLICA_REGION") or "unset"
 
 
 @lru_cache(maxsize=1)

@@ -23,6 +23,7 @@ from chief_of_staff.bot.keyboards import (
     statement_confirm_keyboard,
 )
 from chief_of_staff.bot.utterance import process_user_utterance
+from chief_of_staff.services.timing import log_stage
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
 from chief_of_staff.services.project_ops import ProjectManagementService, ProjectResult
 from chief_of_staff.services.task_intake import IntakeResult, TaskIntakeService
@@ -98,18 +99,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.message.chat.send_action(ChatAction.TYPING)
     try:
-        result = await process_user_utterance(
-            _intake(context),
-            update.effective_user.id,
-            chat_id,
-            update.message.text,
-            planning=_planning(context),
-            projects=_projects(context),
-            lifecycle=_lifecycle(context),
-            queries=_queries(context),
-            router=context.bot_data.get("intent_router"),
-            context=context.bot_data.get("conversation"),
-        )
+        with log_stage("process_user_utterance"):
+            result = await process_user_utterance(
+                _intake(context),
+                update.effective_user.id,
+                chat_id,
+                update.message.text,
+                planning=_planning(context),
+                projects=_projects(context),
+                lifecycle=_lifecycle(context),
+                queries=_queries(context),
+                router=context.bot_data.get("intent_router"),
+                context=context.bot_data.get("conversation"),
+            )
     except Exception:
         logger.exception("Task interpretation failed")
         await update.message.reply_text(

@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 from typing import Literal, Protocol
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, union, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from chief_of_staff.infrastructure.database.orm.reminder import TaskReminderRow
@@ -37,6 +37,7 @@ from chief_of_staff.services.names import (
 from chief_of_staff.services.person_match import PersonHit
 from chief_of_staff.services.person_resolution import PersonAliasHit, inflection_variant
 from chief_of_staff.services.task_validation import is_ready
+from chief_of_staff.services.timing import log_stage
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,24 @@ class SqlAlchemyTaskRepository:
         include_archived_projects: bool = False,
         project_id: UUID | None = None,
     ) -> list[PlanCandidate]:
+        with log_stage("db.list_user_tasks"):
+            return await self._list_user_tasks(
+                telegram_user_id,
+                exclude_statuses=exclude_statuses,
+                only_statuses=only_statuses,
+                include_archived_projects=include_archived_projects,
+                project_id=project_id,
+            )
+
+    async def _list_user_tasks(
+        self,
+        telegram_user_id: int,
+        *,
+        exclude_statuses: Sequence[str] | None = CLOSED_TASK_STATUSES,
+        only_statuses: Sequence[str] | None = None,
+        include_archived_projects: bool = False,
+        project_id: UUID | None = None,
+    ) -> list[PlanCandidate]:
         async with self._sessions()() as session:
             owner = await session.scalar(
                 select(UserRow).where(UserRow.telegram_id == telegram_user_id)
@@ -194,6 +213,10 @@ class SqlAlchemyTaskRepository:
 
     async def list_people_for_user(self, telegram_user_id: int) -> list[PersonHit]:
         """People on this user's tasks (any status). Never inserts a person."""
+        with log_stage("db.list_people_for_user"):
+            return await self._list_people_for_user(telegram_user_id)
+
+    async def _list_people_for_user(self, telegram_user_id: int) -> list[PersonHit]:
         async with self._sessions()() as session:
             owner = await session.scalar(
                 select(UserRow).where(UserRow.telegram_id == telegram_user_id)
@@ -213,8 +236,7 @@ class SqlAlchemyTaskRepository:
                 .join(ProjectRow, TaskRow.project_id == ProjectRow.id)
                 .where(_task_visible_to_owner(owner.id))
             )
-            rows = (await session.execute(via_people)).all()
-            rows += (await session.execute(via_waiting)).all()
+            rows = (await session.execute(union(via_people, via_waiting))).all()
             unique: dict[UUID, PersonHit] = {}
             for person_id, name in rows:
                 unique[person_id] = PersonHit(name=name, person_id=person_id)
@@ -223,22 +245,42 @@ class SqlAlchemyTaskRepository:
     async def get_user_task(
         self, telegram_user_id: int, task_id: UUID
     ) -> PlanCandidate | None:
-        async with self._sessions()() as session:
-            row = (
-                await session.execute(
+        found = await self.list_user_tasks_by_ids(
+            telegram_user_id, (task_id,), include_closed=True
+        )
+        return found[0] if found else None
+
+    async def list_user_tasks_by_ids(
+        self,
+        telegram_user_id: int,
+        task_ids: Sequence[UUID],
+        *,
+        include_closed: bool = False,
+    ) -> list[PlanCandidate]:
+        ordered = [task_id for task_id in task_ids]
+        if not ordered:
+            return []
+        with log_stage("db.list_user_tasks_by_ids", count=len(ordered)):
+            async with self._sessions()() as session:
+                owner = await session.scalar(
+                    select(UserRow).where(UserRow.telegram_id == telegram_user_id)
+                )
+                if owner is None:
+                    return []
+                query = (
                     select(TaskRow, ProjectRow)
                     .join(ProjectRow, TaskRow.project_id == ProjectRow.id)
-                    .join(UserRow, TaskRow.owner_user_id == UserRow.id)
                     .where(
-                        UserRow.telegram_id == telegram_user_id,
-                        TaskRow.id == task_id,
+                        _task_visible_to_owner(owner.id),
+                        TaskRow.id.in_(tuple(ordered)),
                     )
                 )
-            ).first()
-            if row is None:
-                return None
-            found = await self._candidates_from_rows(session, [row])
-            return found[0] if found else None
+                if not include_closed:
+                    query = query.where(TaskRow.status.notin_(tuple(CLOSED_TASK_STATUSES)))
+                rows = (await session.execute(query)).all()
+                found = await self._candidates_from_rows(session, rows)
+            by_id = {task.id: task for task in found}
+            return [by_id[task_id] for task_id in ordered if task_id in by_id]
 
     async def complete_user_task(
         self,
@@ -929,6 +971,12 @@ class SqlAlchemyTaskRepository:
         return owner
 
     async def list_person_aliases_for_user(
+        self, telegram_user_id: int
+    ) -> list[PersonAliasHit]:
+        with log_stage("db.list_person_aliases_for_user"):
+            return await self._list_person_aliases_for_user(telegram_user_id)
+
+    async def _list_person_aliases_for_user(
         self, telegram_user_id: int
     ) -> list[PersonAliasHit]:
         async with self._sessions()() as session:

@@ -6,7 +6,9 @@ Classify a Telegram message (Ukrainian or English) about the user's work.
 intents:
 - create_project: explicitly create a new empty project ("створи проєкт BG",
   "додай проєкт Fundraising", "новий проєкт — X", "create project Angel",
-  "/newproject"). new_name is the display name as written. Never create a task.
+  "/newproject", "створено новий проєкт X", "я створив проєкт X",
+  "created a new project X"). new_name is the display name as written.
+  Never create a task. Never only congratulate.
 - list_projects: show active projects ("покажи проєкти", "мої проєкти")
 - list_archived_projects: archived only ("покажи архівні проєкти", "архів проєктів")
 - archive_project: hide from the active list ("видали X зі списку", "архівуй X",

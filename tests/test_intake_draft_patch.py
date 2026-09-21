@@ -75,7 +75,7 @@ async def test_exact_two_turn_transcript_shows_confirmation() -> None:
     assert "Проект приміщення" not in second.text
     assert "півгодин" not in second.text.casefold()
     assert "2026-09-20" in second.text
-    assert "Estimated time: 30 min" in second.text
+    assert "Оцінка часу: 30 хв" in second.text
     assert "рішення, що робити під час жовтих тривог" in second.text.casefold()
     assert "Який дедлайн" not in second.text
     draft = store.get(1, 10).draft

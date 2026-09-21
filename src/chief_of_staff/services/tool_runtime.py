@@ -20,6 +20,7 @@ from chief_of_staff.services.task_math import (
 )
 from chief_of_staff.services.task_query import QueryKind, QueryResult, TaskQueryService
 from chief_of_staff.services.task_query_format import format_all_tasks_grouped, format_person_task_list
+from chief_of_staff.services.timing import log_stage
 
 
 def needs_grounded_tools(interp: UtteranceInterpretation) -> bool:
@@ -38,6 +39,18 @@ def needs_grounded_tools(interp: UtteranceInterpretation) -> bool:
 
 
 async def execute_grounded_tools(
+    queries: TaskQueryService,
+    user_id: int,
+    interp: UtteranceInterpretation,
+    snapshot: ConversationSnapshot | None,
+    *,
+    today: date,
+) -> QueryResult:
+    with log_stage("grounded_tools", kind=str(interp.kind)):
+        return await _execute_grounded_tools(queries, user_id, interp, snapshot, today=today)
+
+
+async def _execute_grounded_tools(
     queries: TaskQueryService,
     user_id: int,
     interp: UtteranceInterpretation,
@@ -95,6 +108,8 @@ async def execute_grounded_tools(
             tasks = _apply_task_filters(tasks, interp, today)
             return _global_list_result(tasks, interp)
         result = await queries.handle_intent(user_id, mapped)
+        if not _needs_task_reload(interp):
+            return result
         include_closed = mapped.status_filter == "done" or result.status_filter == "done"
         tasks = await queries.tasks_by_ids(
             user_id, result.task_ids, include_closed=include_closed
@@ -127,6 +142,8 @@ async def execute_grounded_tools(
     else:
         result = await queries.handle_intent(user_id, mapped)
     if result.is_person_ambiguity:
+        return result
+    if not _needs_task_reload(interp):
         return result
     include_closed = (mapped.status_filter == "done") or (result.status_filter == "done")
     tasks = await queries.tasks_by_ids(
@@ -169,6 +186,15 @@ def _is_period_query(
     interp: UtteranceInterpretation, snapshot: ConversationSnapshot | None
 ) -> bool:
     return interp.kind == RouterKind.LIST_PERIOD
+
+
+def _needs_task_reload(interp: UtteranceInterpretation) -> bool:
+    return bool(
+        interp.exclude_indexes
+        or interp.include_overdue
+        or interp.period
+        or interp.available_minutes
+    )
 
 
 async def _search_tasks(

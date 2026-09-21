@@ -34,7 +34,11 @@ from chief_of_staff.services.intake_project import (
     resolve_intake_project,
     strip_project_framing,
 )
-from chief_of_staff.services.task_questions import follow_up_questions, format_follow_up
+from chief_of_staff.services.task_questions import (
+    detect_reply_language,
+    follow_up_questions,
+    format_follow_up,
+)
 from chief_of_staff.services.task_session import DraftPhase, InMemoryTaskSessionStore, TaskSession
 from chief_of_staff.services.task_validation import (
     fill_missing_from_user_reply,
@@ -246,7 +250,11 @@ class TaskIntakeService:
         self._store.put(
             user_id,
             chat_id,
-            TaskSession(draft=session.draft, phase=DraftPhase.COLLECTING),
+            TaskSession(
+                draft=session.draft,
+                phase=DraftPhase.COLLECTING,
+                language=session.language,
+            ),
         )
         return IntakeResult(kind=IntakeKind.EDIT_PROMPT, text=EDIT_PROMPT)
 
@@ -283,6 +291,11 @@ class TaskIntakeService:
         missing = missing_required_fields(draft)
         previous = self._store.get(user_id, chat_id)
         presented = previous.presented_project_names if previous else ()
+        language = detect_reply_language(
+            last_user_text,
+            draft,
+            previous.language if previous else None,
+        )
         if missing:
             self._store.put(
                 user_id,
@@ -292,9 +305,15 @@ class TaskIntakeService:
                     phase=DraftPhase.COLLECTING,
                     presented_project_names=presented,
                     similar_project_name=previous.similar_project_name if previous else None,
+                    language=language,
                 ),
             )
-            questions = follow_up_questions(missing, last_user_text=last_user_text)
+            questions = follow_up_questions(
+                missing,
+                last_user_text=last_user_text,
+                draft=draft,
+                previous_language=previous.language if previous else None,
+            )
             return IntakeResult(
                 kind=IntakeKind.FOLLOW_UP,
                 text=format_follow_up(questions),
@@ -313,6 +332,7 @@ class TaskIntakeService:
                 draft=draft,
                 phase=DraftPhase.CONFIRMING,
                 presented_project_names=presented,
+                language=language,
             ),
         )
         return IntakeResult(
@@ -389,6 +409,7 @@ class TaskIntakeService:
         list_projects = getattr(self._repository, "list_projects_for_user", None)
         if list_projects is not None:
             names = [name for name, _count in await list_projects(user_id)]
+        previous = self._store.get(user_id, chat_id)
         self._store.put(
             user_id,
             chat_id,
@@ -398,6 +419,7 @@ class TaskIntakeService:
                 similar_project_name=similar_name,
                 requested_project=wanted,
                 presented_project_names=tuple(names),
+                language=previous.language if previous else detect_reply_language(wanted, draft),
             ),
         )
         return IntakeResult(

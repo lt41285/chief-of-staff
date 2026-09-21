@@ -31,6 +31,7 @@ class ScriptedRouter:
     def __init__(self, outputs: list[UtteranceInterpretation | Exception]) -> None:
         self._outputs = list(outputs)
         self.calls: list[str] = []
+        self.phrase_calls: list[str] = []
 
     async def interpret(
         self,
@@ -59,6 +60,7 @@ class ScriptedRouter:
         allowed_task_ids: tuple[str, ...] = (),
         **kwargs: object,
     ) -> str | None:
+        self.phrase_calls.append(text)
         return None
 
 
@@ -695,4 +697,133 @@ async def test_not_this_one_the_second_selects_index(
     async with session_factory() as session:
         rows = (await session.scalars(select(TaskRow))).all()
         assert all(row.status != "done" for row in rows)
+
+
+async def test_complete_one_task_skips_phrase_and_second_interpret(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    await _seed_taras(repository)
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.COMPLETE_TASK,
+                person_query="Тарас Хома",
+                task_index=1,
+            )
+        ]
+    )
+    result, _, _ = await _turn(
+        repository, "Заверши першу задачу по Хомі", router=router
+    )
+    assert router.calls == ["Заверши першу задачу по Хомі"]
+    assert router.phrase_calls == []
+    assert result.kind in {LifecycleKind.ASK_CONFIRM, LifecycleKind.ASK_WHICH, QueryKind.INFO}
+
+
+async def test_people_list_turn_logs_one_grounded_tools_round(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    from loguru import logger
+
+    await _seed_taras(repository)
+    records: list[str] = []
+    handler_id = logger.add(
+        lambda message: records.append(str(message.record["extra"].get("stage") or "")),
+        format="{message}",
+    )
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.PEOPLE_TASKS_QUERY, person_query="Тарас Хома"
+            )
+        ]
+    )
+    try:
+        await _turn(repository, "Покажи, що у мене є по Тарасові Хомі", router=router)
+    finally:
+        logger.remove(handler_id)
+    assert records.count("safe_interpret") == 1
+    assert records.count("grounded_tools") == 1
+    assert "safe_interpret_followup" not in records
+    assert "phrase" not in records
+    assert "query.people_aliases_tasks" in records
+    assert "db.list_user_tasks" in records
+
+
+async def test_simple_people_list_skips_phrase_and_second_interpret(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    await _seed_taras(repository)
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.PEOPLE_TASKS_QUERY, person_query="Тарас Хома"
+            )
+        ]
+    )
+    result, _, _ = await _turn(
+        repository, "Покажи, що у мене є по Тарасові Хомі", router=router
+    )
+    assert "Тарас Хома" in result.text
+    assert router.calls == ["Покажи, що у мене є по Тарасові Хомі"]
+    assert router.phrase_calls == []
+
+
+async def test_fit_follow_up_still_runs_second_interpret(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    await _seed_taras(repository)
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.PEOPLE_TASKS_QUERY,
+                person_query="Тарас Хома",
+                follow_up_tool="sum_estimates",
+            ),
+            UtteranceInterpretation(kind=RouterKind.SUM_ESTIMATES, use_listed_ids=True),
+        ]
+    )
+    result, _, store = await _turn(
+        repository, "Покажи, що у мене є по Тарасові Хомі", router=router
+    )
+    assert len(router.calls) == 2
+    assert router.phrase_calls == []
+    assert result.task_ids or "хвилин" in result.text.casefold()
+    del store
+
+
+async def test_tasks_by_ids_batch_keeps_done_when_requested(
+    repository: SqlAlchemyTaskRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    open_id = await persist(
+        repository,
+        complete_draft(
+            project="BG",
+            people=("Тарас Хома",),
+            task_title="Погодити відкритий бюджет із командою",
+        ),
+        user=1,
+        chat=1,
+    )
+    done_id = await persist(
+        repository,
+        complete_draft(
+            project="BG",
+            people=("Тарас Хома",),
+            task_title="Надіслати закриті матеріали партнерам",
+        ),
+        user=1,
+        chat=1,
+    )
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(TaskRow, done_id)
+            assert row is not None
+            row.status = "done"
+    queries = TaskQueryService(repository)
+    opened = await queries.tasks_by_ids(1, (open_id, done_id), include_closed=False)
+    assert [task.id for task in opened] == [open_id]
+    both = await queries.tasks_by_ids(1, (open_id, done_id), include_closed=True)
+    assert [task.id for task in both] == [open_id, done_id]
 

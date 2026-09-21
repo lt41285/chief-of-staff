@@ -1,5 +1,6 @@
 """Single Telegram → AI conversation, or legacy parsers if no router."""
 
+from dataclasses import replace
 from datetime import datetime
 
 from chief_of_staff.models.project_command import ProjectIntent, ProjectIntentKind
@@ -17,7 +18,11 @@ from chief_of_staff.services.completion_statement import (
     classify_completion_phrasing,
 )
 from chief_of_staff.services.clock import KYIV
-from chief_of_staff.services.conversation_context import InMemoryConversationStore, PendingAmbiguity
+from chief_of_staff.services.conversation_context import (
+    ConversationSnapshot,
+    InMemoryConversationStore,
+    PendingAmbiguity,
+)
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
 from chief_of_staff.services.followup_intent import (
     looks_like_listed_status_dispute,
@@ -63,9 +68,11 @@ from chief_of_staff.services.task_command_intent import (
 )
 from chief_of_staff.services.task_query import QueryKind, QueryResult, TaskQueryService
 from chief_of_staff.services.tool_runtime import execute_grounded_tools, needs_grounded_tools
+from chief_of_staff.services.timing import log_stage
 
 UserReply = IntakeResult | PlanResult | ProjectResult | LifecycleResult | QueryResult
 _MAX_TOOL_ROUNDS = 2
+_FOLLOW_UP_TOOLS = frozenset({"fit_minutes", "sum_estimates"})
 INFORMAL_ADDRESS_ACK = "Добре, далі говоритиму на ти."
 
 
@@ -205,6 +212,11 @@ async def _ai_first_turn(
             )
             _remember_assistant(context, user_id, chat_id, result.text)
             return result
+        created = await _maybe_python_project_create(
+            projects, user_id, chat_id, text, context
+        )
+        if created is not None:
+            return created
         status_query = await _maybe_python_status_query(
             intake,
             user_id,
@@ -231,9 +243,10 @@ async def _ai_first_turn(
             )
             _remember_assistant(context, user_id, chat_id, result.text)
             return result
-    interp, error = await safe_interpret(
-        router, text, snapshot, now=now, pending_session=pending
-    )
+    with log_stage("safe_interpret"):
+        interp, error = await safe_interpret(
+            router, text, snapshot, now=now, pending_session=pending
+        )
     if error:
         if pending is not None:
             return QueryResult(kind=QueryKind.INFO, text=PENDING_INTERPRET_FAILED)
@@ -241,7 +254,6 @@ async def _ai_first_turn(
     assert interp is not None
     interp = prefer_read_over_write(interp, text, pending)
     await _maybe_persist_address(intake, user_id, chat_id, interp, text)
-    address_form = await _load_address_form(intake, user_id)
 
     if snapshot is not None and snapshot.pending_ambiguity is not None and queries is not None:
         leaving_ambiguity = interp.pending_action == "switch_intent" or interp.kind in {
@@ -301,6 +313,11 @@ async def _ai_first_turn(
             return handled
 
     if interp.kind == RouterKind.GENERAL_CHAT:
+        created = await _maybe_python_project_create(
+            projects, user_id, chat_id, text, context
+        )
+        if created is not None:
+            return created
         reply = interp.chat_reply
         if looks_like_informal_address(text) or interp.address_form == "informal":
             reply = INFORMAL_ADDRESS_ACK
@@ -452,11 +469,31 @@ async def _ai_first_turn(
                 context=None,
                 excluded=current.exclude_person,
             )
-        if round_index == 0 and current.follow_up_tool and queries is not None:
+        follow_up = (current.follow_up_tool or "").strip()
+        if (
+            round_index == 0
+            and queries is not None
+            and follow_up in _FOLLOW_UP_TOOLS
+            and current.kind.value not in _FOLLOW_UP_TOOLS
+        ):
             facts = result.text if isinstance(result, QueryResult) else ""
-            nxt, err = await safe_interpret(
-                router, text, snapshot, now=now, tool_facts=facts
-            )
+            if isinstance(result, QueryResult) and result.task_ids:
+                listed = {
+                    "task_ids": result.task_ids,
+                    "titles": result.titles,
+                    "listed_facts": result.listed_facts,
+                    "status_filter": result.status_filter,
+                    "person_name": result.person_name,
+                }
+                snapshot = (
+                    replace(snapshot, **listed)
+                    if snapshot is not None
+                    else ConversationSnapshot(**listed)
+                )
+            with log_stage("safe_interpret_followup", tool=follow_up):
+                nxt, err = await safe_interpret(
+                    router, text, snapshot, now=now, tool_facts=facts
+                )
             if err or nxt is None:
                 break
             current = nxt
@@ -466,9 +503,13 @@ async def _ai_first_turn(
     assert result is not None
     if isinstance(result, QueryResult) and context is not None:
         _remember_query(context, user_id, chat_id, result, current, original_text=text)
-    phrased = await _maybe_phrase(
-        router, text, snapshot, result, now=now, address_form=address_form
-    )
+    phrased = None
+    if current.advice:
+        address_form = await _load_address_form(intake, user_id)
+        with log_stage("phrase"):
+            phrased = await _maybe_phrase(
+                router, text, snapshot, result, now=now, address_form=address_form
+            )
     if phrased is not None and isinstance(result, QueryResult):
         result = with_query_text(result, phrased)
     _remember_assistant(context, user_id, chat_id, result.text)
@@ -989,6 +1030,23 @@ def _bind_person_from_snapshot(
     if utterance_mentions_name(snap, query) and snap.casefold() != query.casefold():
         return intent.model_copy(update={"person_query": snap})
     return intent
+
+
+async def _maybe_python_project_create(
+    projects: ProjectManagementService | None,
+    user_id: int,
+    chat_id: int,
+    text: str,
+    context: InMemoryConversationStore | None,
+) -> UserReply | None:
+    if projects is None:
+        return None
+    create = parse_project_intent_deterministic(text)
+    if create is None or create.kind != ProjectIntentKind.CREATE_PROJECT:
+        return None
+    result = await projects.handle_intent(user_id, chat_id, create)
+    _remember_assistant(context, user_id, chat_id, result.text)
+    return result
 
 
 async def _maybe_python_status_query(

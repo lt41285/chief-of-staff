@@ -1,5 +1,6 @@
 """Read-only task lists. Never creates or updates tasks."""
 
+import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
@@ -29,6 +30,7 @@ from chief_of_staff.services.task_query_format import (
     format_unknown_person,
     format_unknown_project,
 )
+from chief_of_staff.services.timing import log_stage
 
 
 class QueryKind(StrEnum):
@@ -103,8 +105,9 @@ class TaskQueryService:
         if not query:
             return QueryResult(kind=QueryKind.INFO, text=format_unknown_person(""))
         original_query = query
-        people = await self._repository.list_people_for_user(user_id)
-        aliases = await self._repository.list_person_aliases_for_user(user_id)
+        people, aliases, tasks = await self._people_aliases_and_tasks(
+            user_id, intent.status_filter
+        )
         resolved = resolve_person_reference(query, people, aliases)
         if resolved.status == "ambiguous":
             names = tuple(person.name for person in resolved.candidates)
@@ -120,7 +123,6 @@ class TaskQueryService:
         if resolved.status == "resolved" and resolved.person is not None:
             people = [resolved.person]
             search_name = resolved.person.name
-        tasks = await self._tasks_for_user(user_id, intent.status_filter)
         exclude = tuple(
             name for name in (intent.exclude_person,) if name and name.strip()
         )
@@ -215,8 +217,9 @@ class TaskQueryService:
         query = (intent.person_query or "").strip().strip(" —–-")
         if not query:
             return QueryResult(kind=QueryKind.INFO, text=format_unknown_person(""))
-        people = await self._repository.list_people_for_user(user_id)
-        aliases = await self._repository.list_person_aliases_for_user(user_id)
+        people, aliases, tasks = await self._people_aliases_and_tasks(
+            user_id, intent.status_filter
+        )
         resolved = resolve_person_reference(query, people, aliases)
         if resolved.status == "ambiguous":
             names = tuple(person.name for person in resolved.candidates)
@@ -245,7 +248,6 @@ class TaskQueryService:
                 ambiguity_candidates=names,
                 status_filter=intent.status_filter,
             )
-        tasks = await self._tasks_for_user(user_id, intent.status_filter)
         display_name = matched_selected.name if matched_selected is not None else query
         related: list[PlanCandidate] = []
         linked = False
@@ -424,15 +426,39 @@ class TaskQueryService:
         *,
         include_closed: bool = False,
     ) -> list[PlanCandidate]:
-        found: list[PlanCandidate] = []
-        for task_id in task_ids:
-            task = await self._repository.get_user_task(user_id, task_id)
-            if task is None:
-                continue
-            if not include_closed and task.status in {"done", "cancelled"}:
-                continue
-            found.append(task)
-        return found
+        with log_stage("query.tasks_by_ids", count=len(task_ids)):
+            batch = getattr(self._repository, "list_user_tasks_by_ids", None)
+            if batch is not None:
+                return await batch(
+                    user_id, list(task_ids), include_closed=include_closed
+                )
+            found: list[PlanCandidate] = []
+            for task_id in task_ids:
+                task = await self._repository.get_user_task(user_id, task_id)
+                if task is None:
+                    continue
+                if not include_closed and task.status in {"done", "cancelled"}:
+                    continue
+                found.append(task)
+            return found
+
+    async def _people_aliases_and_tasks(
+        self, user_id: int, status_filter: str | None
+    ) -> tuple[list[PersonHit], list, list[PlanCandidate]]:
+        aliases_fn = getattr(self._repository, "list_person_aliases_for_user", None)
+
+        async def _aliases() -> list:
+            if aliases_fn is None:
+                return []
+            return await aliases_fn(user_id)
+
+        with log_stage("query.people_aliases_tasks"):
+            people, aliases, tasks = await asyncio.gather(
+                self._repository.list_people_for_user(user_id),
+                _aliases(),
+                self._tasks_for_user(user_id, status_filter),
+            )
+        return people, aliases, tasks
 
     async def _tasks_for_user(
         self, user_id: int, status_filter: str | None

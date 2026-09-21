@@ -181,20 +181,82 @@ def test_follow_up_asks_only_still_missing_outcome() -> None:
     assert "конкретне завдання" not in questions[0]
 
 
+def test_date_only_reply_keeps_ukrainian_deadline_question() -> None:
+    draft = TaskDraft(
+        task_title="Поговорити з Андрієм Жовтенецьким про бюджет",
+        project="Фундації УКУ за кордоном",
+        people=("Андрій Жовтенецький",),
+        estimated_minutes=60,
+        desired_outcome="Є розуміння бюджетного процесу",
+    )
+    questions = follow_up_questions(
+        (RequiredField.DEADLINE,),
+        last_user_text="30.09.26",
+        draft=draft,
+        previous_language="uk",
+    )
+    assert questions == ["Який дедлайн (дата)?"]
+    assert "What is the deadline" not in questions[0]
+
+
+def test_confirmation_card_is_ukrainian() -> None:
+    card = format_confirmation_card(
+        complete_draft(
+            project="Фундації УКУ за кордоном",
+            people=("Андрій Жовтенецький",),
+            task_title="Поговорити з Андрієм про бюджет",
+            desired_outcome="Є розуміння бюджетного процесу",
+        )
+    )
+    assert "📋 Задача" in card
+    assert "Проєкт:" in card
+    assert "Готово створити цю задачу?" in card
+    assert "Ready to create this task" not in card
+    assert "Task created" not in card
+
+
+async def test_intake_keeps_ukrainian_after_numeric_deadline_reply() -> None:
+    repo = FakeTaskRepository(known_projects=("Фундації УКУ за кордоном",))
+    incomplete = TaskDraft(
+        task_title="Поговорити з Андрієм Жовтенецьким про бюджет",
+        project="Фундації УКУ за кордоном",
+        people=("Андрій Жовтенецький",),
+        estimated_minutes=60,
+        desired_outcome="Є розуміння бюджетного процесу",
+    )
+    interpreter = ScriptedInterpreter([incomplete, incomplete])
+    service = TaskIntakeService(interpreter, InMemoryTaskSessionStore(), repo)
+    first = await service.handle_user_text(
+        1,
+        "Так, додай задачу поговорити з Андрієм про бюджет для фундації",
+        chat_id=10,
+    )
+    assert first.kind == IntakeKind.FOLLOW_UP
+    assert first.text == "Який дедлайн (дата)?"
+    second = await service.handle_user_text(1, "30.09.26", chat_id=10)
+    assert "What is the deadline" not in second.text
+    if second.kind == IntakeKind.FOLLOW_UP:
+        assert second.text == "Який дедлайн (дата)?"
+    else:
+        assert second.kind == IntakeKind.CONFIRMATION
+        assert "📋 Задача" in second.text
+        assert "Готово створити цю задачу?" in second.text
+
+
 def test_confirmation_card_matches_expected_layout() -> None:
     card = format_confirmation_card(complete_draft())
-    assert "📋 Task" in card
-    assert "Project: Unity Center" in card
-    assert "Task: Agree the revised budget with Taras" in card
-    assert "People: Taras" in card
-    assert "Deadline: 2026-09-02" in card
+    assert "📋 Задача" in card
+    assert "Проєкт: Unity Center" in card
+    assert "Задача: Agree the revised budget with Taras" in card
+    assert "Люди: Taras" in card
+    assert "Дедлайн: 2026-09-02" in card
     assert "Importance" not in card
     assert "Urgency" not in card
     assert "High" not in card
     assert "Urgent" not in card
-    assert "Estimated time: 20 min" in card
-    assert "Outcome: Revised budget is agreed" in card
-    assert "Ready to create this task? Yes / Edit / Cancel" in card
+    assert "Оцінка часу: 20 хв" in card
+    assert "Результат: Revised budget is agreed" in card
+    assert "Готово створити цю задачу? Так / Редагувати / Скасувати" in card
 
 
 async def test_intake_asks_then_confirms_then_validates_without_db() -> None:
@@ -224,7 +286,7 @@ async def test_intake_asks_then_confirms_then_validates_without_db() -> None:
 
     yes = await service.handle_user_text(1, "Yes", chat_id=10)
     assert yes.kind == IntakeKind.CREATED
-    assert "✅ Task created" in yes.text
+    assert "✅ Задачу створено" in yes.text
     assert "Unity Center" in yes.text
 
 

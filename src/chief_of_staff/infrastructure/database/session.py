@@ -43,10 +43,14 @@ def asyncpg_pooler_connect_args() -> dict[str, Any]:
 
 
 def asyncpg_pooler_engine_kwargs() -> Mapping[str, Any]:
-    """PgBouncer already pools; SQLAlchemy must not keep a second pool."""
+    """PgBouncer already pools; SQLAlchemy must not keep a second pool.
+
+    ``pool_pre_ping`` is off because NullPool never reuses connections, so a
+    checkout ping would add a round-trip to every session with no benefit.
+    """
     return {
         "poolclass": NullPool,
-        "pool_pre_ping": True,
+        "pool_pre_ping": False,
         "connect_args": asyncpg_pooler_connect_args(),
     }
 

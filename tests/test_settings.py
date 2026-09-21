@@ -17,6 +17,19 @@ def test_log_level_reads_env(monkeypatch) -> None:
     assert settings.log_level == "DEBUG"
 
 
+def test_supabase_pooler_region_extracts_aws_token() -> None:
+    from chief_of_staff.config.settings import supabase_pooler_region
+
+    assert (
+        supabase_pooler_region(
+            "postgresql+asyncpg://user:secret@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+        )
+        == "eu-central-1"
+    )
+    assert supabase_pooler_region(None) == "unset"
+    assert supabase_pooler_region("postgresql://user:secret@localhost:5432/postgres") == "unknown"
+
+
 def test_startup_configure_logging_uses_settings_log_level(monkeypatch) -> None:
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     settings = Settings(_env_file=None, telegram_bot_token="test-token")

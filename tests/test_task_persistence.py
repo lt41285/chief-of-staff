@@ -224,7 +224,7 @@ async def test_confirm_persists_and_clears_draft() -> None:
     yes = await service.handle_user_text(1, "Yes", chat_id=1)
     assert yes.kind == IntakeKind.CREATED
     assert yes.text == format_created_message(complete_draft())
-    assert "✅ Task created" in yes.text
+    assert "✅ Задачу створено" in yes.text
     assert len(repo.saved) == 1
     assert store.get(1, 1) is None
 
