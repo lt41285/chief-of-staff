@@ -10,7 +10,7 @@ from chief_of_staff.services.deadline_parse import parse_natural_deadline
 
 _ISO = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _END_OF_WEEK = re.compile(
-    r"(?i)(?:до\s+)?кінц[яю]\s+(?:цього\s+)?тижн|"
+    r"(?i)(?:до\s+)?кін(?:ець|ц[яю])\s+(?:цього\s+)?тижн|"
     r"end\s+of\s+(?:the\s+)?week|"
     r"by\s+(?:the\s+)?end\s+of\s+(?:the\s+)?week"
 )

@@ -417,7 +417,7 @@ def test_truncation_copy() -> None:
 
     tasks = [fake(i) for i in range(37)]
     text = format_all_tasks_grouped([("BG", tasks)], total=37)
-    assert f"Показано {MAX_LISTED_TASKS} із 37." in text
+    assert "і ще 17 задач" in text
     assert text.count("Task number") == MAX_LISTED_TASKS
 
 

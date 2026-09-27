@@ -212,6 +212,23 @@ async def test_missing_deadline_asks_follow_up(
         assert row.deadline == date(2026, 9, 10)
 
 
+async def test_postpone_follow_up_duration_and_named_month_end(
+    repository: SqlAlchemyTaskRepository,
+) -> None:
+    await _task(repository, BUDGET)
+    life = _life(repository)
+    asked = await life.handle_user_text(1, 1, "Перенеси задачу про бюджет.")
+    assert asked.kind == LifecycleKind.ASK_DEADLINE
+    preview = await life.handle_user_text(1, 1, "на місяць відтепер")
+    assert preview.kind == LifecycleKind.ASK_CONFIRM
+    assert "Буде: 2 жовтня" in preview.text
+    life.cancel(1, 1)
+    asked = await life.handle_user_text(1, 1, "Перенеси задачу про бюджет.")
+    preview = await life.handle_user_text(1, 1, "на кінець жовтня?")
+    assert preview.kind == LifecycleKind.ASK_CONFIRM
+    assert "Буде: 31 жовтня" in preview.text
+
+
 async def test_voice_follow_up_date(
     repository: SqlAlchemyTaskRepository,
     session_factory: async_sessionmaker[AsyncSession],

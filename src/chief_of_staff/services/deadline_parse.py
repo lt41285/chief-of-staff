@@ -1,5 +1,6 @@
 """Resolve relative and written dates in Europe/Kyiv. No LLM."""
 
+from calendar import monthrange
 from datetime import date, timedelta
 import re
 
@@ -148,22 +149,89 @@ _MONTH_DAY = re.compile(
     re.IGNORECASE,
 )
 _END_OF_NEXT_WEEK = re.compile(
-    r"(?i)(?:до\s+)?кінц[яю]\s+наступн\w*\s+тижн|end\s+of\s+next\s+week"
+    r"(?i)(?:до\s+)?кін(?:ець|ц[яю])\s+наступн\w*\s+тижн|end\s+of\s+next\s+week"
 )
 _END_OF_WEEK = re.compile(
-    r"(?i)(?:до\s+)?кінц[яю]\s+(?:цього\s+)?тижн|end\s+of\s+(?:the\s+)?week"
+    r"(?i)(?:до\s+)?кін(?:ець|ц[яю])\s+(?:цього\s+)?тижн|end\s+of\s+(?:the\s+)?week"
 )
 _END_OF_NEXT_MONTH = re.compile(
-    r"(?i)(?:до\s+)?кінц[яю]\s+наступн\w*\s+місяц|end\s+of\s+next\s+month"
+    r"(?i)(?:до\s+)?кін(?:ець|ц[яю])\s+наступн\w*\s+місяц|end\s+of\s+next\s+month"
 )
 _END_OF_MONTH = re.compile(
-    r"(?i)(?:до\s+)?кінц[яю]\s+(?:цього\s+|поточного\s+)?місяц|end\s+of\s+(?:the\s+|this\s+)?month"
+    r"(?i)(?:до\s+)?кін(?:ець|ц[яю])\s+(?:цього\s+|поточного\s+)?місяц|end\s+of\s+(?:the\s+|this\s+)?month"
 )
 _START_NEXT_WEEK = re.compile(
     r"(?i)початк[уі]\s+наступн\w*\s+тижн|start\s+of\s+next\s+week"
 )
 _START_NEXT_MONTH = re.compile(
     r"(?i)початк[уі]\s+наступн\w*\s+місяц|start\s+of\s+next\s+month"
+)
+_END_OF_NAMED_MONTH = re.compile(
+    r"(?i)(?:(?:до|на)\s+)?(?:кін(?:ець|ц[яю])|end\s+of)\s+(" + _MONTH_ALT + r")\b"
+)
+_DURATION_NUMBERS = {
+    "один": 1,
+    "одна": 1,
+    "одне": 1,
+    "одного": 1,
+    "два": 2,
+    "дві": 2,
+    "двох": 2,
+    "три": 3,
+    "трьох": 3,
+    "чотири": 4,
+    "чотирьох": 4,
+    "п'ять": 5,
+    "п'яти": 5,
+    "шість": 6,
+    "шести": 6,
+    "сім": 7,
+    "семи": 7,
+    "вісім": 8,
+    "восьми": 8,
+    "дев'ять": 9,
+    "дев'яти": 9,
+    "десять": 10,
+    "десяти": 10,
+    "one": 1,
+    "a": 1,
+    "an": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+_DURATION_UNITS = {
+    "день": "day",
+    "дня": "day",
+    "дні": "day",
+    "днів": "day",
+    "day": "day",
+    "days": "day",
+    "тиждень": "week",
+    "тижня": "week",
+    "тижні": "week",
+    "тижнів": "week",
+    "week": "week",
+    "weeks": "week",
+    "місяць": "month",
+    "місяця": "month",
+    "місяці": "month",
+    "місяців": "month",
+    "month": "month",
+    "months": "month",
+}
+_DURATION_FROM_NOW = re.compile(
+    r"(?i)\b(?:на|через|in)\s+(?:(\d+|"
+    + "|".join(re.escape(name) for name in sorted(_DURATION_NUMBERS, key=len, reverse=True))
+    + r")\s+)?("
+    + "|".join(re.escape(name) for name in sorted(_DURATION_UNITS, key=len, reverse=True))
+    + r")(?:\s+(?:відтепер|вперед|from\s+now))?\b"
 )
 _RELATIVE = re.compile(
     r"\b(сьогодні|today|завтра|tomorrow|післязавтра|day after tomorrow)\b",
@@ -178,7 +246,7 @@ _WEEKDAY = re.compile(
 
 
 def parse_natural_deadline(text: str, today: date) -> date | None:
-    cleaned = " ".join(text.translate(_APOS).split())
+    cleaned = _clean_deadline_text(text)
     if not cleaned:
         return None
     found = _scan(cleaned, today)
@@ -186,7 +254,7 @@ def parse_natural_deadline(text: str, today: date) -> date | None:
 
 
 def strip_deadline_phrase(text: str, today: date) -> tuple[date | None, str]:
-    cleaned = " ".join(text.translate(_APOS).split())
+    cleaned = _clean_deadline_text(text)
     found = _scan(cleaned, today)
     if found is None:
         return None, cleaned
@@ -198,7 +266,11 @@ def strip_deadline_phrase(text: str, today: date) -> tuple[date | None, str]:
         remainder,
     )
     remainder = re.sub(r"(?i)^\s*(?:на|до|until|till|to|on)\b", "", remainder)
-    return deadline, " ".join(remainder.split()).strip(" .,;:—–-")
+    return deadline, " ".join(remainder.split()).strip(" .,;:—–-?!")
+
+
+def _clean_deadline_text(text: str) -> str:
+    return " ".join(text.translate(_APOS).split()).strip(" .,;:—–-?!")
 
 
 def _scan(text: str, today: date) -> tuple[date, tuple[int, int]] | None:
@@ -236,6 +308,12 @@ def _scan(text: str, today: date) -> tuple[date, tuple[int, int]] | None:
         found = pattern.search(text)
         if found:
             last = (resolver(today), found.span())
+    for match in _END_OF_NAMED_MONTH.finditer(text):
+        last = (_named_month_end(today, _month(match.group(1))), match.span())
+    for match in _DURATION_FROM_NOW.finditer(text):
+        parsed = _duration_from_now(today, match.group(1), match.group(2))
+        if parsed is not None:
+            last = (parsed, match.span())
     relative = _RELATIVE.search(text)
     if relative:
         last = (_relative(relative.group(1), today), relative.span())
@@ -296,6 +374,37 @@ def _month_end(today: date) -> date:
     if today.month == 12:
         return date(today.year + 1, 1, 1) - timedelta(days=1)
     return date(today.year, today.month + 1, 1) - timedelta(days=1)
+
+
+def _named_month_end(today: date, month: int) -> date:
+    parsed = date(today.year, month, monthrange(today.year, month)[1])
+    if parsed < today:
+        parsed = date(today.year + 1, month, monthrange(today.year + 1, month)[1])
+    return parsed
+
+
+def _duration_from_now(today: date, count_text: str | None, unit_text: str) -> date | None:
+    if not count_text:
+        count = 1
+    elif count_text.isdigit():
+        count = int(count_text)
+    else:
+        count = _DURATION_NUMBERS[count_text.translate(_APOS).casefold()]
+    if count < 1:
+        return None
+    unit = _DURATION_UNITS[unit_text.translate(_APOS).casefold()]
+    if unit == "day":
+        return today + timedelta(days=count)
+    if unit == "week":
+        return today + timedelta(weeks=count)
+    return _add_months(today, count)
+
+
+def _add_months(day: date, months: int) -> date:
+    index = day.month - 1 + months
+    year = day.year + index // 12
+    month = index % 12 + 1
+    return date(year, month, min(day.day, monthrange(year, month)[1]))
 
 
 def _next_month_start(today: date) -> date:

@@ -6,6 +6,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from chief_of_staff.bot.handlers.task import _chat_id, reply_markup_for
+from chief_of_staff.bot.telegram_text import reply_telegram_text
 from chief_of_staff.services.voice import TRANSCRIBE_FAILED, VoiceMessageService
 
 
@@ -41,8 +42,9 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if result.error or result.intake is None or result.heard_text is None:
         await update.message.reply_text(result.error or TRANSCRIBE_FAILED)
         return
-    await update.message.reply_text(result.heard_text)
-    await update.message.reply_text(
+    await reply_telegram_text(update.message.reply_text, result.heard_text)
+    await reply_telegram_text(
+        update.message.reply_text,
         result.intake.text,
         reply_markup=reply_markup_for(result.intake),
     )

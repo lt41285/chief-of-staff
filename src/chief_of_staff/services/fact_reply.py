@@ -8,6 +8,7 @@ from chief_of_staff.services.reminder_messages import format_uk_date
 from chief_of_staff.services.task_query_format import (
     format_empty_status_tasks,
     format_person_task_list,
+    format_remaining_tasks,
     format_task_count_phrase,
 )
 
@@ -66,11 +67,13 @@ def _header(bundle: SearchBundle) -> str:
 
 
 def _compact_tasks(tasks: Sequence[PlanCandidate]) -> str:
-    lines: list[str] = []
-    for task in tasks[:20]:
-        lines.append(
-            f"— {task.title}, дедлайн {format_uk_date(task.deadline)}"
-        )
+    shown = list(tasks[:20])
+    lines = [
+        f"— {task.title}, дедлайн {format_uk_date(task.deadline)}" for task in shown
+    ]
+    hidden = len(tasks) - len(shown)
+    if hidden:
+        lines.append(format_remaining_tasks(hidden))
     return "\n".join(lines)
 
 

@@ -38,8 +38,32 @@ def test_dotted_invalid_date_returns_none() -> None:
     assert resolve_deadline_expression("31.02.26", TODAY) is None
 
 
+def test_duration_from_now() -> None:
+    assert parse_natural_deadline("на місяць", TODAY) == date(2026, 10, 2)
+    assert parse_natural_deadline("на місяць відтепер", TODAY) == date(2026, 10, 2)
+    assert parse_natural_deadline("на місяць вперед", TODAY) == date(2026, 10, 2)
+    assert parse_natural_deadline("на два тижні", TODAY) == date(2026, 9, 16)
+    assert parse_natural_deadline("на 2 тижні", TODAY) == date(2026, 9, 16)
+    assert parse_natural_deadline("через місяць", TODAY) == date(2026, 10, 2)
+    assert parse_natural_deadline("на три дні", TODAY) == date(2026, 9, 5)
+    assert parse_natural_deadline("на тиждень", TODAY) == date(2026, 9, 9)
+    assert parse_natural_deadline("на місяць", date(2026, 1, 31)) == date(2026, 2, 28)
+    assert resolve_deadline_expression("на місяць відтепер", TODAY) == date(2026, 10, 2)
+
+
+def test_end_of_named_month() -> None:
+    assert parse_natural_deadline("кінець жовтня", TODAY) == date(2026, 10, 31)
+    assert parse_natural_deadline("на кінець жовтня", TODAY) == date(2026, 10, 31)
+    assert parse_natural_deadline("на кінець жовтня?", TODAY) == date(2026, 10, 31)
+    assert parse_natural_deadline("до кінця грудня", TODAY) == date(2026, 12, 31)
+    assert parse_natural_deadline("кінець вересня", TODAY) == date(2026, 9, 30)
+    assert parse_natural_deadline("кінець серпня", TODAY) == date(2027, 8, 31)
+    assert resolve_deadline_expression("на кінець жовтня?", TODAY) == date(2026, 10, 31)
+
+
 def test_period_deadline_phrases() -> None:
     assert parse_natural_deadline("до кінця місяця", TODAY) == date(2026, 9, 30)
+    assert parse_natural_deadline("кінець місяця", TODAY) == date(2026, 9, 30)
     assert parse_natural_deadline("до кінця тижня", TODAY) == date(2026, 9, 6)
     assert parse_natural_deadline("на початку наступного тижня", TODAY) == date(2026, 9, 7)
     assert parse_natural_deadline("до кінця наступного місяця", TODAY) == date(2026, 10, 31)

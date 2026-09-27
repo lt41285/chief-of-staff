@@ -130,6 +130,7 @@ def test_build_application_uses_post_init_not_create_task_in_startup_source() ->
     source = inspect.getsource(app_mod.build_application)
     assert ".post_init(_on_post_init)" in source
     assert ".application_class(ChiefOfStaffApplication)" in source
+    assert "add_error_handler" in source
     assert "create_task" not in source
     assert "application.start =" not in inspect.getsource(app_mod)
     assert "application.stop =" not in inspect.getsource(app_mod)

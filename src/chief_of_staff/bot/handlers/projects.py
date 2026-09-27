@@ -12,6 +12,7 @@ from chief_of_staff.bot.keyboards import (
     project_confirm_keyboard,
     project_disambiguate_keyboard,
 )
+from chief_of_staff.bot.telegram_text import reply_telegram_text
 from chief_of_staff.models.project_command import ProjectIntent, ProjectIntentKind
 from chief_of_staff.services.project_ops import ProjectManagementService, ProjectResult
 from chief_of_staff.services.task_intake import IntakeResult, TaskIntakeService
@@ -50,7 +51,11 @@ async def on_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         chat_id,
         ProjectIntent(kind=ProjectIntentKind.LIST_PROJECTS),
     )
-    await update.message.reply_text(result.text, reply_markup=project_markup(result))
+    await reply_telegram_text(
+        update.message.reply_text,
+        result.text,
+        reply_markup=project_markup(result),
+    )
 
 
 async def on_newproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -65,7 +70,11 @@ async def on_newproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         chat_id,
         ProjectIntent(kind=ProjectIntentKind.CREATE_PROJECT, new_name=name or None),
     )
-    await update.message.reply_text(result.text, reply_markup=project_markup(result))
+    await reply_telegram_text(
+        update.message.reply_text,
+        result.text,
+        reply_markup=project_markup(result),
+    )
 
 
 async def on_project_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -94,4 +103,8 @@ async def on_project_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.message.reply_text("Не вдалося змінити проєкт. Спробуй ще раз.")
         return
     if query.message:
-        await query.message.reply_text(result.text, reply_markup=project_markup(result))
+        await reply_telegram_text(
+            query.message.reply_text,
+            result.text,
+            reply_markup=project_markup(result),
+        )

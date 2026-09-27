@@ -14,6 +14,22 @@ EMPTY_ALL = "Немає відкритих задач."
 ASK_PROJECTS = "Покажи всі проєкти?"
 
 
+def format_remaining_tasks(hidden: int) -> str:
+    return f"і ще {hidden} {_tasks_word(hidden)}"
+
+
+def _tasks_word(count: int) -> str:
+    absolute = abs(count)
+    if 11 <= absolute % 100 <= 14:
+        return "задач"
+    last = absolute % 10
+    if last == 1:
+        return "задача"
+    if 2 <= last <= 4:
+        return "задачі"
+    return "задач"
+
+
 def format_unknown_project(name: str) -> str:
     return f"Не знайшов проєкт «{name}». {ASK_PROJECTS}"
 
@@ -131,7 +147,7 @@ def format_person_task_list(
             )
             lines.append("")
     if len(tasks) > shown:
-        lines.append(f"Показано {shown} із {len(tasks)}.")
+        lines.append(format_remaining_tasks(len(tasks) - shown))
     return "\n".join(lines).rstrip()
 
 
@@ -157,7 +173,7 @@ def format_project_task_list(
         lines.append("")
     count = total if total is not None else len(tasks)
     if count > len(shown):
-        lines.append(f"Показано {len(shown)} із {count}.")
+        lines.append(format_remaining_tasks(count - len(shown)))
     return "\n".join(lines).rstrip()
 
 
@@ -191,7 +207,7 @@ def format_all_tasks_grouped(
             lines.extend(format_task_list_block(shown, task, today=day))
             lines.append("")
     if total > shown:
-        lines.append(f"Показано {shown} із {total}.")
+        lines.append(format_remaining_tasks(total - shown))
     return "\n".join(lines).rstrip()
 
 

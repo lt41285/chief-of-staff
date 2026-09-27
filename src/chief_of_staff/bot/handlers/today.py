@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from chief_of_staff.bot.keyboards import PLAN_ACCEPT, PLAN_CANCEL, PLAN_REPLAN, plan_keyboard
+from chief_of_staff.bot.telegram_text import reply_telegram_text
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
 
 
@@ -29,7 +30,11 @@ async def on_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id is None:
         return
     result = _planning(context).start(update.effective_user.id, chat_id)
-    await update.message.reply_text(result.text, reply_markup=plan_markup(result))
+    await reply_telegram_text(
+        update.message.reply_text,
+        result.text,
+        reply_markup=plan_markup(result),
+    )
 
 
 async def on_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -57,4 +62,8 @@ async def on_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.message.reply_text("Не вдалося оновити план. Спробуй ще раз.")
         return
     if query.message:
-        await query.message.reply_text(result.text, reply_markup=plan_markup(result))
+        await reply_telegram_text(
+            query.message.reply_text,
+            result.text,
+            reply_markup=plan_markup(result),
+        )

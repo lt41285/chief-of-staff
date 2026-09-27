@@ -6,6 +6,7 @@ from typing import Any, Final
 from loguru import logger
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
+from chief_of_staff.bot.handlers.errors import on_application_error
 from chief_of_staff.bot.handlers.projects import on_newproject, on_project_callback, on_projects
 from chief_of_staff.bot.handlers.start import on_start
 from chief_of_staff.bot.handlers.task import on_lifecycle_callback, on_task_callback, on_text
@@ -168,4 +169,5 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CallbackQueryHandler(on_project_callback, pattern=r"^proj:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     application.add_handler(MessageHandler(filters.VOICE, on_voice))
+    application.add_error_handler(on_application_error)
     return application

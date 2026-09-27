@@ -22,6 +22,7 @@ from chief_of_staff.bot.keyboards import (
     statement_choice_keyboard,
     statement_confirm_keyboard,
 )
+from chief_of_staff.bot.telegram_text import reply_telegram_text
 from chief_of_staff.bot.utterance import process_user_utterance
 from chief_of_staff.services.timing import log_stage
 from chief_of_staff.services.daily_planning import DailyPlanningService, PlanResult
@@ -118,7 +119,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "I could not interpret that. Please try a shorter message."
         )
         return
-    await update.message.reply_text(result.text, reply_markup=reply_markup_for(result))
+    await reply_telegram_text(
+        update.message.reply_text,
+        result.text,
+        reply_markup=reply_markup_for(result),
+    )
 
 
 async def on_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -140,7 +145,11 @@ async def on_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         return
     if query.message:
-        await query.message.reply_text(result.text, reply_markup=reply_markup_for(result))
+        await reply_telegram_text(
+            query.message.reply_text,
+            result.text,
+            reply_markup=reply_markup_for(result),
+        )
 
 
 async def on_lifecycle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -188,4 +197,8 @@ async def on_lifecycle_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await query.message.reply_text("Не вдалося оновити задачу. Спробуй ще раз.")
         return
     if query.message:
-        await query.message.reply_text(result.text, reply_markup=reply_markup_for(result))
+        await reply_telegram_text(
+            query.message.reply_text,
+            result.text,
+            reply_markup=reply_markup_for(result),
+        )
