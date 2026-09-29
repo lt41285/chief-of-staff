@@ -69,6 +69,7 @@ from chief_of_staff.services.task_command_intent import (
 from chief_of_staff.services.task_query import QueryKind, QueryResult, TaskQueryService
 from chief_of_staff.services.tool_runtime import execute_grounded_tools, needs_grounded_tools
 from chief_of_staff.services.timing import log_stage
+from chief_of_staff.services.write_claim_guard import guard_untrusted_reply
 
 UserReply = IntakeResult | PlanResult | ProjectResult | LifecycleResult | QueryResult
 _MAX_TOOL_ROUNDS = 2
@@ -542,9 +543,10 @@ async def _maybe_phrase(
     if spoken is None:
         return None
     if hasattr(spoken, "message"):
-        return validate_grounded_reply(spoken, result)
+        grounded = validate_grounded_reply(spoken, result)
+        return guard_untrusted_reply(grounded, source="phrase")
     if isinstance(spoken, str):
-        return spoken
+        return guard_untrusted_reply(spoken, source="phrase")
     return None
 
 

@@ -19,6 +19,7 @@ from chief_of_staff.services.conversation_context import (
 )
 from chief_of_staff.services.task_query import QueryResult
 from chief_of_staff.services.task_validation import draft_from_extraction, format_kyiv_clock
+from chief_of_staff.services.write_claim_guard import guard_untrusted_reply
 
 ROUTER_FAILED = "Не вдалося розібрати повідомлення. Спробуй ще раз."
 ROUTER_UNCLEAR = "Не зовсім зрозумів. Напиши, що саме показати або що зробити."
@@ -175,6 +176,7 @@ def interpretation_to_draft(
 
 
 def default_chat_reply(text: str, suggested: str | None = None) -> str:
+    suggested = guard_untrusted_reply(suggested, source="chat_reply")
     if suggested and suggested.strip():
         return suggested.strip()
     folded = text.strip().casefold()

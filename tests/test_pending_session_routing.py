@@ -612,3 +612,26 @@ async def test_actual_time_pending_can_switch_to_list_projects(
     )
     assert result.kind.value == "list" or "📁 Проєкти" in result.text
     assert life.describe_pending(1, 1) is None
+
+
+async def test_keep_chat_during_pending_never_claims_unperformed_write(
+    repository: SqlAlchemyTaskRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    ops = _ops(repository)
+    asked = await ops.handle_intent(
+        1, 1, ProjectIntent(kind=ProjectIntentKind.CREATE_PROJECT, new_name=None)
+    )
+    assert asked.text == ASK_CREATE_NAME
+    router = ScriptedRouter(
+        [
+            UtteranceInterpretation(
+                kind=RouterKind.GENERAL_CHAT,
+                chat_reply="Записав, проєкт створено!",
+            ),
+        ]
+    )
+    reply = await _turn(repository, "ну ок", router=router, projects=ops)
+    assert "Записав" not in reply.text
+    assert "створено" not in reply.text
+    assert await _project_count(session_factory) == 0
