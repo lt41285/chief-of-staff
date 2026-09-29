@@ -61,6 +61,7 @@ class VoiceMessageService:
         *,
         filename: str = "voice.ogg",
         duration_seconds: int | None = None,
+        reply_to_text: str | None = None,
     ) -> VoiceHandleResult:
         logger.info(
             "Voice received user_id={user_id} chat_id={chat_id} bytes={size} duration_s={duration}",
@@ -104,6 +105,7 @@ class VoiceMessageService:
             queries=self._queries,
             router=self._router,
             context=self._context,
+            reply_to_text=reply_to_text,
         )
         return VoiceHandleResult(
             heard_text=format_heard_message(transcript),

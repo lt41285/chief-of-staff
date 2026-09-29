@@ -92,6 +92,17 @@ def reply_markup_for(
     return confirmation_keyboard() if result.show_confirm_buttons else None
 
 
+def replied_bot_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    """Text of the bot message the user replied to (reminder, card, list)."""
+    message = update.message
+    replied = message.reply_to_message if message else None
+    if replied is None or replied.from_user is None:
+        return None
+    if replied.from_user.id != context.bot.id:
+        return None
+    return replied.text or replied.caption
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text or not update.effective_user:
         return
@@ -112,6 +123,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 queries=_queries(context),
                 router=context.bot_data.get("intent_router"),
                 context=context.bot_data.get("conversation"),
+                reply_to_text=replied_bot_text(update, context),
             )
     except Exception:
         logger.exception("Task interpretation failed")

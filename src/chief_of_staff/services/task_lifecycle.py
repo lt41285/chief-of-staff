@@ -144,6 +144,24 @@ class LifecycleResult:
     defer_intake_text: str | None = None
 
 
+@dataclass(frozen=True)
+class ReplyTasks:
+    """Open and done tasks cited in a replied-to bot message."""
+
+    open: tuple[PlanCandidate, ...]
+    done: tuple[PlanCandidate, ...]
+
+
+# Shorter titles would match by accident inside unrelated message text.
+_MIN_REPLY_TITLE = 5
+_REPLY_ACTIONS = {
+    TaskIntentKind.COMPLETE_TASK: LifecycleAction.COMPLETE,
+    TaskIntentKind.POSTPONE_TASK: LifecycleAction.POSTPONE,
+    TaskIntentKind.WAITING_TASK: LifecycleAction.WAITING,
+    TaskIntentKind.RESUME_TASK: LifecycleAction.RESUME,
+}
+
+
 class TaskLifecycleService:
     def __init__(
         self,
@@ -338,6 +356,95 @@ class TaskLifecycleService:
             return self._ask_which_task(user_id, chat_id, text)
         return self._ask_which_task(
             user_id, chat_id, text, hint=NO_MATCHED_COMPLETION
+        )
+
+    def answers_pending(self, user_id: int, chat_id: int, text: str) -> bool:
+        """True if ``text`` is a control answer to the open lifecycle card."""
+        if not self.is_awaiting_input(user_id, chat_id):
+            return False
+        folded = text.strip().casefold()
+        return (
+            folded in _YES
+            or folded in _CANCEL
+            or _PICK.match(folded) is not None
+            or parse_actual_minutes(text) is not None
+            or is_skip_actual_time(text)
+        )
+
+    async def tasks_in_message(
+        self, user_id: int, message_text: str | None
+    ) -> ReplyTasks:
+        """Tasks whose exact title appears in a bot message the user replied to."""
+        if not message_text:
+            return ReplyTasks(open=(), done=())
+        haystack = normalize_entity_name(message_text)
+
+        def cited(tasks: list[PlanCandidate]) -> tuple[PlanCandidate, ...]:
+            return tuple(
+                task
+                for task in tasks
+                if len(title := normalize_entity_name(task.title)) >= _MIN_REPLY_TITLE
+                and title in haystack
+            )
+
+        open_tasks = cited(await self._repository.list_user_tasks(user_id))
+        done_tasks = cited(
+            await self._repository.list_user_tasks(user_id, only_statuses=("done",))
+        )
+        return ReplyTasks(open=open_tasks, done=done_tasks)
+
+    async def handle_reply(
+        self,
+        user_id: int,
+        chat_id: int,
+        intent: TaskIntent,
+        replied: ReplyTasks,
+        *,
+        raw_text: str,
+    ) -> LifecycleResult | None:
+        """Run a lifecycle command on the task(s) cited by the replied-to message.
+
+        None when the message cites no task or the intent is not a lifecycle
+        action — the caller then continues the normal flow.
+        """
+        action = _REPLY_ACTIONS.get(intent.kind)
+        if action is None:
+            return None
+        if not replied.open:
+            if replied.done and action == LifecycleAction.COMPLETE:
+                return LifecycleResult(kind=LifecycleKind.INFO, text=ALREADY_DONE)
+            return None
+        if action == LifecycleAction.WAITING and not intent.waiting_for:
+            return None
+        pending = PendingLifecycle(
+            phase=LifecyclePhase.CHOOSING,
+            action=action,
+            actual_minutes=parse_actual_minutes(raw_text),
+            new_deadline=(
+                parse_natural_deadline(raw_text, self._today())
+                or parse_deadline(intent.new_deadline)
+                if action == LifecycleAction.POSTPONE
+                else None
+            ),
+            waiting_for=intent.waiting_for,
+        )
+        if len(replied.open) == 1:
+            return self._present_task(user_id, chat_id, replied.open[0], pending)
+        if action == LifecycleAction.COMPLETE and looks_like_all_reference(raw_text):
+            return self._present_batch(
+                user_id,
+                chat_id,
+                BatchMatch(tasks=replied.open, unmatched=()),
+                raw_text,
+            )
+        choices = replied.open[:_MAX_REFERENCE_CHOICES]
+        pending.candidate_ids = tuple(task.id for task in choices)
+        self._store.put(user_id, chat_id, pending)
+        return LifecycleResult(
+            kind=LifecycleKind.ASK_WHICH,
+            text=format_choice_list(choices, _which_header(action)),
+            show_choice_buttons=True,
+            choice_count=len(choices),
         )
 
     def defer_to_new_task(self, user_id: int, chat_id: int) -> LifecycleResult:

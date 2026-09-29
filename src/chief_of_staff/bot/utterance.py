@@ -60,6 +60,7 @@ from chief_of_staff.services.task_intake import IntakeResult, TaskIntakeService
 from chief_of_staff.services.task_lifecycle import (
     LifecycleKind,
     LifecycleResult,
+    ReplyTasks,
     TaskLifecycleService,
 )
 from chief_of_staff.services.task_command_intent import (
@@ -90,6 +91,7 @@ async def process_user_utterance(
     router: IntentRouter | None = None,
     context: InMemoryConversationStore | None = None,
     force_intake: bool = False,
+    reply_to_text: str | None = None,
 ) -> UserReply:
     if force_intake:
         return await intake.handle_user_text(user_id, text, chat_id=chat_id)
@@ -105,6 +107,7 @@ async def process_user_utterance(
             queries=queries,
             router=router,
             context=context,
+            reply_to_text=reply_to_text,
         )
     if planning is not None and planning.is_awaiting_input(user_id, chat_id):
         return await planning.handle_user_text(user_id, chat_id, text)
@@ -146,6 +149,7 @@ async def _ai_first_turn(
     queries: TaskQueryService | None,
     router: IntentRouter,
     context: InMemoryConversationStore | None,
+    reply_to_text: str | None = None,
 ) -> UserReply:
     if context is not None:
         context.append_turn(user_id, chat_id, "user", text)
@@ -182,6 +186,22 @@ async def _ai_first_turn(
         result = await lifecycle.handle_user_text(user_id, chat_id, text)
         _remember_assistant(context, user_id, chat_id, result.text)
         return result
+    replied = await _replied_tasks(lifecycle, user_id, chat_id, text, reply_to_text)
+    if replied is not None and classify_completion_phrasing(text) in {
+        CompletionPhrasing.COMPLETED,
+        CompletionPhrasing.SHORT,
+    }:
+        assert lifecycle is not None
+        handled = await lifecycle.handle_reply(
+            user_id,
+            chat_id,
+            TaskIntent(kind=TaskIntentKind.COMPLETE_TASK),
+            replied,
+            raw_text=text,
+        )
+        if handled is not None:
+            _remember_assistant(context, user_id, chat_id, handled.text)
+            return handled
     if pending is None:
         if (
             snapshot is not None
@@ -255,6 +275,14 @@ async def _ai_first_turn(
     assert interp is not None
     interp = prefer_read_over_write(interp, text, pending)
     await _maybe_persist_address(intake, user_id, chat_id, interp, text)
+    if replied is not None and (mapped_reply := interpretation_to_intent(interp)) is not None:
+        assert lifecycle is not None
+        handled = await lifecycle.handle_reply(
+            user_id, chat_id, mapped_reply, replied, raw_text=text
+        )
+        if handled is not None:
+            _remember_assistant(context, user_id, chat_id, handled.text)
+            return handled
 
     if snapshot is not None and snapshot.pending_ambiguity is not None and queries is not None:
         leaving_ambiguity = interp.pending_action == "switch_intent" or interp.kind in {
@@ -515,6 +543,28 @@ async def _ai_first_turn(
         result = with_query_text(result, phrased)
     _remember_assistant(context, user_id, chat_id, result.text)
     return result
+
+
+async def _replied_tasks(
+    lifecycle: TaskLifecycleService | None,
+    user_id: int,
+    chat_id: int,
+    text: str,
+    reply_to_text: str | None,
+) -> ReplyTasks | None:
+    """Tasks cited by the bot message the user replied to, if any.
+
+    An answer to the pending lifecycle card («так», «2», minutes) stays with
+    that card instead of starting a new command on the cited task.
+    """
+    if lifecycle is None or not reply_to_text:
+        return None
+    if lifecycle.answers_pending(user_id, chat_id, text):
+        return None
+    replied = await lifecycle.tasks_in_message(user_id, reply_to_text)
+    if not replied.open and not replied.done:
+        return None
+    return replied
 
 
 async def _maybe_phrase(

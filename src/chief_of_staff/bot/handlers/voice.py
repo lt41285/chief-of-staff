@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
-from chief_of_staff.bot.handlers.task import _chat_id, reply_markup_for
+from chief_of_staff.bot.handlers.task import _chat_id, replied_bot_text, reply_markup_for
 from chief_of_staff.bot.telegram_text import reply_telegram_text
 from chief_of_staff.services.voice import TRANSCRIBE_FAILED, VoiceMessageService
 
@@ -38,6 +38,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         audio,
         filename="voice.ogg",
         duration_seconds=voice.duration,
+        reply_to_text=replied_bot_text(update, context),
     )
     if result.error or result.intake is None or result.heard_text is None:
         await update.message.reply_text(result.error or TRANSCRIBE_FAILED)
